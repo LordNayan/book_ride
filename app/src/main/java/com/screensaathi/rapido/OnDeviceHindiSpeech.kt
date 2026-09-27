@@ -9,6 +9,7 @@ import android.speech.RecognitionSupport
 import android.speech.RecognitionSupportCallback
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.util.Log
 
 /** Android's on-device recognizer. This class never creates a network recognizer. */
 class OnDeviceHindiSpeech(private val context: Context) {
@@ -44,7 +45,10 @@ class OnDeviceHindiSpeech(private val context: Context) {
             override fun onRmsChanged(rmsdB: Float) {}
             override fun onBufferReceived(buffer: ByteArray?) {}
             override fun onEndOfSpeech() {}
-            override fun onError(error: Int) = fail("आवाज़ समझ नहीं आई। दोबारा बोलें।")
+            override fun onError(error: Int) {
+                Log.w("OnDeviceHindiSpeech", "Recognition error code=$error")
+                fail("आवाज़ समझ नहीं आई। दोबारा बोलें।")
+            }
             override fun onResults(results: Bundle?) {
                 val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                     ?.firstOrNull()?.trim().orEmpty()

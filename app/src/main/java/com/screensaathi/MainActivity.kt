@@ -62,8 +62,7 @@ class MainActivity : AppCompatActivity() {
                 toast("पहले स्क्रीन पर दिखाने की अनुमति दें।")
                 return@setOnClickListener
             }
-            OverlayService.start(this)
-            moveTaskToBack(true)
+            launchAssistant()
         }
 
     }
@@ -72,6 +71,13 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         refreshStatus()
         handleRehearsalIntent(intent)
+        if (!isFinishing && intent?.getStringExtra(EXTRA_ACTION) == null &&
+            Settings.canDrawOverlays(this) && hasMic() && isAccessibilityEnabled()) {
+            // An APK update stops the foreground service. Opening the app
+            // again should restore the floating control automatically.
+            if (!OverlayService.isRunning()) launchAssistant()
+            else moveTaskToBack(true)
+        }
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -92,7 +98,8 @@ class MainActivity : AppCompatActivity() {
             "preview" -> {
                 if (BuildConfig.DEBUG) {
                     val destination = intent.getStringExtra("destination").orEmpty()
-                    OverlayService.previewDebug(this, destination)
+                    val pickup = intent.getStringExtra("pickup")
+                    OverlayService.previewDebug(this, destination, pickup)
                 }
             }
             "run" -> {
@@ -125,7 +132,7 @@ class MainActivity : AppCompatActivity() {
             .setMessage(
                 "इससे सहायक रैपिडो की खुली स्क्रीन पर जगह, गाड़ी और किराया पढ़ सकेगा।\n\n" +
                     "यात्रा की झलक फ़ोन पर ही तैयार होती है। स्क्रीन किसी क्लाउड सेवा को नहीं भेजी जाती। " +
-                    "सहायक बुकिंग या भुगतान नहीं करता।\n\n" +
+                    "सहायक आपकी चुनी हुई गाड़ी बुक करता है, लेकिन भुगतान या ओटीपी नहीं भरता।\n\n" +
                     "अगली स्क्रीन पर रैपिडो सहायक स्क्रीन रीडर चालू करें।"
             )
             .setPositiveButton("आगे बढ़ें") { _, _ ->
@@ -146,6 +153,13 @@ class MainActivity : AppCompatActivity() {
     private fun hasMic(): Boolean =
         ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) ==
             PackageManager.PERMISSION_GRANTED
+
+    private fun launchAssistant() {
+        OverlayService.start(this)
+        window.decorView.postDelayed({
+            if (OverlayService.isRunning() && !isFinishing) moveTaskToBack(true)
+        }, 600L)
+    }
 
     private fun isAccessibilityEnabled(): Boolean {
         val expected = "$packageName/$packageName.ScreenReaderService"

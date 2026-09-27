@@ -9,7 +9,7 @@
     android:layout_height="wrap_content"
     android:orientation="vertical"
     android:background="@drawable/pill_bg"
-    android:padding="10dp"
+    android:padding="8dp"
     android:elevation="12dp">
 
     <!-- Card body: shown only when expanded. Sits ABOVE the pill row. -->
@@ -19,20 +19,37 @@
         android:layout_height="wrap_content"
         android:orientation="vertical"
         android:paddingHorizontal="8dp"
-        android:paddingBottom="10dp"
+        android:paddingBottom="6dp"
         android:visibility="gone">
 
-        <TextView
-            android:id="@+id/instruction_text"
+        <FrameLayout
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Tap the mic and tell me what you want to do."
-            android:textColor="@color/saathi_text"
-            android:textSize="16sp"
-            android:lineSpacingExtra="2dp"
-            android:paddingBottom="12dp"
-            android:maxLines="3"
-            android:ellipsize="end" />
+            android:layout_height="wrap_content">
+
+            <TextView
+                android:id="@+id/instruction_text"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:paddingEnd="48dp"
+                android:paddingBottom="8dp"
+                android:text="Tap the mic and tell me what you want to do."
+                android:textColor="@color/saathi_text"
+                android:textSize="16sp"
+                android:lineSpacingExtra="2dp"
+                android:maxLines="3"
+                android:ellipsize="end" />
+
+            <ImageView
+                android:id="@+id/close_button"
+                android:layout_width="44dp"
+                android:layout_height="44dp"
+                android:layout_gravity="top|end"
+                android:src="@drawable/ic_close"
+                android:scaleType="center"
+                android:contentDescription="छोटा करें"
+                android:clickable="true"
+                android:focusable="true" />
+        </FrameLayout>
 
         <!-- Choice row: one button per option (e.g. the ride apps on this
              phone). Hidden unless the current step actually asks something. -->
@@ -168,12 +185,14 @@
     <!-- Minimised presentation: a single dot. Shown only in MINIMIZED, where
          the goal is the smallest possible touch footprint over the app the
          user is actually trying to use. -->
-    <View
+    <ImageView
         android:id="@+id/minimized_dot"
         android:layout_width="44dp"
         android:layout_height="44dp"
         android:layout_gravity="center_horizontal"
-        android:background="@drawable/mic_circle_bg"
+        android:src="@mipmap/ic_launcher_round"
+        android:scaleType="fitCenter"
+        android:contentDescription="Start a ride with Ride Helper"
         android:clickable="true"
         android:focusable="true"
         android:visibility="gone" />
@@ -204,7 +223,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginStart="10dp"
-            android:text="ScreenSaathi"
+            android:text="Ride Helper"
             android:textColor="@color/saathi_text"
             android:textSize="15sp"
             android:textStyle="bold" />
@@ -223,16 +242,5 @@
             android:textColor="@color/saathi_text_dim"
             android:textSize="12sp" />
             
-        <TextView
-            android:id="@+id/close_button"
-            android:layout_width="32dp"
-            android:layout_height="32dp"
-            android:layout_marginStart="10dp"
-            android:text="✖"
-            android:gravity="center"
-            android:textColor="@color/saathi_text_dim"
-            android:textSize="18sp"
-            android:clickable="true"
-            android:focusable="true" />
     </LinearLayout>
 </LinearLayout>

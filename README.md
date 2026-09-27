@@ -1,8 +1,8 @@
-# Book Ride: Rapido fare preview
+# Ride Helper: Hindi voice rides on Rapido
 
-This Android prototype starts from [ScreenSaathi](https://github.com/NITISH-R-G/ScreenSaathi) (MIT license). It adds a narrow Rapido flow: speak a destination in Hindi, open Rapido, enter the destination, select one unambiguous result and ride type, then read the visible fare aloud. **It never taps Book, Pay, Confirm, or an OTP control.**
+This Android prototype starts from [ScreenSaathi](https://github.com/NITISH-R-G/ScreenSaathi) (MIT license). Say a destination in Hindi. Ride Helper asks whether pickup is at the current location or another place, navigates Rapido, and reads Bike, Auto and Cab fares aloud. After you speak one vehicle choice, it selects that ride and taps Rapido's matching Book button. It never handles payment or OTP.
 
-This is a first version for testing on one Android phone. It has not been tested against a live Rapido screen in this workspace. It stops when the screen does not expose one clear control or fare.
+This version was checked against live Rapido screens on a connected Motorola edge 50 fusion and Galaxy S23 through the fare screen. The final Book tap is implemented and unit tested, but was not exercised on a live ride during development. The app stops if the fare changes after being read or if a required control cannot be verified.
 
 ## Build and run
 
@@ -12,16 +12,19 @@ Requirements: JDK 21, Android SDK 36.1, build tools 36.1.0, and a physical Andro
 2. Run `./gradlew testDebugUnitTest assembleDebug`.
 3. Install `app/build/outputs/apk/debug/app-debug.apk` on the phone.
 4. Open the app and grant microphone, overlay, and accessibility access when Android asks.
-5. Sign into Rapido on that phone. Start the assistant, tap the floating pill, and say, for example, “राजवाड़ा जाना है” or “Rapido par Rajwada ke liye auto chahiye”. With no vehicle spoken, the prototype chooses Auto.
+5. Sign into Rapido on that phone. Start the assistant; after it asks where to go, say, for example, “राजवाड़ा जाना है”. It automatically listens after each spoken question, including pickup and fare choice. You can tap the mic during a prompt to answer early. After hearing the three fares, say “बाइक”, “ऑटो” or “कैब” to book that option.
 
-The app displays and speaks the preview when the exact destination, ride type, one rupee fare, and a Book control are visible. Check the pickup pin and full destination in Rapido yourself. The Stop button cancels the assistant flow. The app does not request a ride.
+The search picks the first result with the strongest title match. Rapido may show Cab Daily or Cab Economy; both are spoken as “कैब”, with the displayed fare. Check the pickup pin and full destination in Rapido. The Stop button cancels the assistant flow.
 
 ## Current limits
 
-- Rapido's screen labels and accessibility tree can change. The current matcher intentionally accepts only a small set of destination field labels and uniquely identifiable search results. An ambiguous location or fare stops the flow.
-- Speech recognition uses Android's **on-device** recognition service with Hindi (`hi-IN`). On Android 13 and newer, the app checks whether a Hindi pack is installed and requests its download if available. If the phone does not support it, the app stops; it never falls back to an online recognizer. Speech output uses an installed offline Android TTS voice. If no such voice is installed, the text remains visible without audio.
-- The result selector currently requires the destination to begin the visible result label, followed by a comma and further address text. This reduces accidental selection of the text still in the search field.
-- There is no final booking step, payment handling, OTP handling, or automatic retry of a booking request.
+- Rapido's screen labels and accessibility tree can change. The matcher accepts the observed pickup, search and fare screens, and stops when it cannot verify them.
+- Speech recognition uses Android's **on-device** recognition service with Hindi (`hi-IN`). On Android 13 and newer, the app checks whether a Hindi pack is installed and requests its download if available. If the phone does not support it, the app stops; it never falls back to an online recognizer. Speech output uses an installed offline Android TTS voice. If no such voice is installed, the text remains visible without audio and the mic button remains available.
+- Rapido receives only a Latin-script place name. The app removes ride words from the spoken request, uses English names for common Indore places, and transliterates other Hindi place names offline. If a clean place name cannot be obtained, it stops before pasting.
+- While Ride Helper is guiding Rapido, it closes Rapido's keyboard after entering a location and whenever the keyboard reappears. If the location row cannot be selected automatically, it asks in Hindi for you to tap the correct row in Rapido and resumes when the next screen appears. Common street-word recognition slips such as “roda” are corrected to “Road” before searching.
+- With all permissions granted, opening Ride Helper starts the floating assistant. Its translucent card stays at the bottom; the cross in its top right minimizes it to an app-icon bubble. The bubble docks on either screen edge, remembers its edge and height, and opens the Hindi destination prompt when tapped. Reopen the app after an APK update to restore its floating control.
+- Pickup and destination text is pasted through Android's clipboard because Rapido's custom fields do not accept accessibility set-text actions. This replaces the phone's current clipboard contents.
+- The app does not handle payment, OTP, or any extra confirmation screen that Rapido might show after Book. A Book tap is sent at most once for a spoken choice.
 
 ## Galaxy S23 offline speech candidate
 

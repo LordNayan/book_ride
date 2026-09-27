@@ -5,23 +5,68 @@ import com.screensaathi.screen.ScreenElement
 import com.screensaathi.screen.ScreenSnapshot
 
 /**
- * A fail-closed Rapido-only state machine. It never emits a booking or payment
- * action. Screen labels are evidence, not instructions from the app.
+ * A Rapido-only state machine. It emits a booking action only after a fresh,
+ * explicit spoken vehicle choice. Screen labels are evidence, not instructions.
  */
 class RapidoPreview(val request: RapidoIntent) {
-    enum class Stage { HOME, SEARCH, RESULTS, VEHICLE, FARE, DONE }
+    enum class Stage { HOME, PICKUP, PICKUP_SEARCH, PICKUP_RESULTS, BOOKING_FOR, SEARCH, RESULTS, MANUAL_RESULT,
+        VEHICLE, FARE, AWAIT_CHOICE, BOOK_SELECT, BOOK_READY, DONE }
     var stage = Stage.HOME
         private set
+    private var destinationSelected = false
+    private var homePickupAddress: String? = null
+    private var quotedFares: Map<RapidoIntent.Vehicle, String> = emptyMap()
+    private var chosenVehicle: RapidoIntent.Vehicle? = null
+    private var actualCabLabel: String? = null
+    private var unmatchedResultReads = 0
+    private var manualNext: Stage? = null
+    private var resultSignature: String? = null
+    private var stableResultReads = 0
 
     sealed class Decision {
         data object Wait : Decision()
         data class Stop(val reason: String) : Decision()
-        data class Tap(val label: String, val next: Stage) : Decision()
-        data class Type(val bounds: Rect, val value: String, val next: Stage) : Decision()
+        data class Tap(val label: String, val bounds: Rect, val next: Stage) : Decision()
+        data class Type(val bounds: Rect, val value: String, val next: Stage,
+            val fieldId: String = "drop_text") : Decision()
         data class Preview(val message: String) : Decision()
+        data class ManualSelection(val next: Stage) : Decision()
+        data class Book(val vehicle: RapidoIntent.Vehicle, val actualLabel: String, val fare: String,
+            val bounds: Rect) : Decision()
     }
 
-    fun advanced(to: Stage) { stage = to }
+    fun advanced(to: Stage) {
+        if (stage == Stage.RESULTS && to == Stage.VEHICLE) destinationSelected = true
+        if (to == Stage.RESULTS || to == Stage.PICKUP_RESULTS ||
+            to == Stage.VEHICLE || to == Stage.BOOKING_FOR) unmatchedResultReads = 0
+        if (to == Stage.RESULTS || to == Stage.PICKUP_RESULTS) {
+            resultSignature = null
+            stableResultReads = 0
+        }
+        stage = to
+    }
+
+    fun manualSelectionOnTimeout(): Decision.ManualSelection? = when (stage) {
+        Stage.RESULTS, Stage.VEHICLE -> Decision.ManualSelection(Stage.VEHICLE)
+        Stage.PICKUP_RESULTS, Stage.BOOKING_FOR -> Decision.ManualSelection(Stage.BOOKING_FOR)
+        else -> null
+    }
+
+    fun awaitManualSelection(next: Stage) {
+        require(stage == Stage.RESULTS || stage == Stage.PICKUP_RESULTS ||
+            stage == Stage.VEHICLE || stage == Stage.BOOKING_FOR)
+        require(next == Stage.VEHICLE || next == Stage.BOOKING_FOR)
+        manualNext = next
+        stage = Stage.MANUAL_RESULT
+    }
+
+    /** Called only after the user spoke one unambiguous vehicle name. */
+    fun choose(vehicle: RapidoIntent.Vehicle): Boolean {
+        if (stage != Stage.AWAIT_CHOICE || quotedFares[vehicle] == null) return false
+        chosenVehicle = vehicle
+        stage = Stage.BOOK_SELECT
+        return true
+    }
 
     fun inspect(screen: ScreenSnapshot): Decision {
         if (screen.packageName != RAPIDO_PACKAGE || !screen.settled || screen.elements.isEmpty()) {
@@ -29,26 +74,108 @@ class RapidoPreview(val request: RapidoIntent) {
         }
         return when (stage) {
             Stage.HOME -> inspectHome(screen)
+            Stage.PICKUP -> inspectPickup(screen)
+            Stage.PICKUP_SEARCH -> inspectPickupSearch(screen)
+            Stage.PICKUP_RESULTS -> inspectPickupResults(screen)
+            Stage.BOOKING_FOR -> inspectBookingFor(screen)
             Stage.SEARCH -> inspectSearch(screen)
             Stage.RESULTS -> inspectResults(screen)
+            Stage.MANUAL_RESULT -> inspectManualResult(screen)
             Stage.VEHICLE -> inspectVehicle(screen)
             Stage.FARE -> inspectFare(screen)
+            Stage.AWAIT_CHOICE -> Decision.Wait
+            Stage.BOOK_SELECT -> inspectBookSelect(screen)
+            Stage.BOOK_READY -> inspectBookReady(screen)
             Stage.DONE -> Decision.Stop("Preview already completed")
         }
     }
 
     private fun inspectHome(screen: ScreenSnapshot): Decision {
         val fields = screen.elements.filter { e ->
-            e.matchesAny("Where to?", "Where to", "Enter drop location", "Drop location",
+            e.matchesAny("Where to?", "Where to", "Where do you want to go?", "Enter drop location", "Drop location",
                 "Enter destination", "Search destination", "कहाँ जाना है", "कहां जाना है", "ड्रॉप लोकेशन")
-        }.distinctBy { it.text.lowercase() }
+        }.distinctBy { it.bounds }
         if (fields.size > 1) return Decision.Stop("More than one destination field is visible")
         val field = fields.singleOrNull() ?: return Decision.Wait
-        return if (field.editable) Decision.Type(field.bounds, request.destination, Stage.RESULTS)
-        else Decision.Tap(field.text, Stage.SEARCH)
+        if (request.pickupLocation == null) {
+            val addresses = screen.elements.filter {
+                it.className == "TextView" && it.bounds.bottom < field.bounds.top &&
+                    it.text.count { c -> c == ',' } >= 2
+            }.distinctBy { it.text }
+            if (addresses.size != 1) return Decision.Stop("Cannot verify current pickup on Home")
+            homePickupAddress = addresses.single().text
+        }
+        return if (field.editable) Decision.Stop("Unexpected editable Home destination")
+        else Decision.Tap(field.text, field.bounds, Stage.PICKUP)
+    }
+
+    private fun inspectPickup(screen: ScreenSnapshot): Decision {
+        if (screen.elements.none { it.text == "Pickup and Drop Screen" }) return Decision.Wait
+        val pickup = screen.elements.filter { it.resourceId == "pickup_text" }
+        if (pickup.size != 1) return Decision.Stop("Cannot identify pickup field")
+        val field = pickup.single()
+        val selected = field.text.removePrefix("Pickup Location is ").removeSuffix(". Double tap to change")
+        if (request.pickupLocation == null) {
+            if (normalize(selected) != normalize(homePickupAddress.orEmpty())) {
+                return Decision.Stop("Current pickup differs from Rapido Home")
+            }
+            stage = Stage.SEARCH
+            return inspectSearch(screen)
+        }
+        if (!field.text.startsWith("Pickup Location is ")) return Decision.Wait
+        return Decision.Tap(field.text, field.bounds, Stage.PICKUP_SEARCH)
+    }
+
+    private fun inspectPickupSearch(screen: ScreenSnapshot): Decision {
+        if (screen.elements.none { it.text == "PICKUP location Select on map" }) return Decision.Wait
+        val place = request.pickupLocation ?: return Decision.Stop("Alternate pickup is missing")
+        val fields = screen.elements.filter {
+            it.resourceId == "pickup_text" &&
+                (it.text.startsWith("Pickup Location is ") ||
+                    it.text.startsWith("Enter Pickup location Input Field."))
+        }
+        if (fields.size != 1) return Decision.Stop("Cannot identify Pickup input")
+        return Decision.Type(fields.single().bounds, place, Stage.PICKUP_RESULTS, "pickup_text")
+    }
+
+    private fun inspectPickupResults(screen: ScreenSnapshot): Decision {
+        val place = request.pickupLocation ?: return Decision.Stop("Alternate pickup is missing")
+        return inspectExactLocationResult(screen, "pickup_text", "Pickup Location is ", place,
+            Stage.BOOKING_FOR)
+    }
+
+    private fun inspectBookingFor(screen: ScreenSnapshot): Decision {
+        if (screen.elements.none { it.resourceId == "bfse_title" && it.text == "Booking for someone else?" }) {
+            return if (screen.elements.any { it.text == "PICKUP location Select on map" } &&
+                screen.elements.any { it.text.matches(Regex("Item \\d+ of \\d+")) }) {
+                unmatchedResult(Stage.BOOKING_FOR)
+            } else Decision.Wait
+        }
+        val choice = screen.elements.filter { it.text == "No, booking for me" }.distinctBy { it.bounds }
+        if (choice.size != 1) return Decision.Stop("Cannot identify booking-for-self option")
+        return Decision.Tap(choice.single().text, choice.single().bounds, Stage.SEARCH)
     }
 
     private fun inspectSearch(screen: ScreenSnapshot): Decision {
+        if (homePickupAddress != null || request.pickupLocation != null) {
+            val expectedPickup = request.pickupLocation ?: homePickupAddress.orEmpty()
+            val actualPickup = screen.elements.singleOrNull { it.resourceId == "pickup_text" }
+                ?.text.orEmpty()
+            if (!normalize(actualPickup).startsWith(normalize("Pickup Location is $expectedPickup"))) {
+                return Decision.Wait
+            }
+        }
+        val rapidoDrop = screen.elements.filter {
+            it.resourceId == "drop_text" &&
+                it.text.startsWith("Enter Drop location Input Field.", ignoreCase = true)
+        }
+        if (rapidoDrop.size > 1) return Decision.Stop("Several Drop inputs are visible")
+        rapidoDrop.singleOrNull()?.let { field ->
+            if (screen.elements.none { it.text.startsWith("Pickup Location is ") }) {
+                return Decision.Stop("Pickup location is not set")
+            }
+            return Decision.Type(field.bounds, request.destination, Stage.RESULTS)
+        }
         val fields = screen.elements.filter { it.editable }
         val destinationFields = fields.filter { it.matchesAny(
             "Where to?", "Where to", "Enter drop location", "Drop location",
@@ -64,49 +191,191 @@ class RapidoPreview(val request: RapidoIntent) {
 
     private fun inspectResults(screen: ScreenSnapshot): Decision {
         val wanted = normalize(request.destination)
+        val queryShown = screen.elements.any {
+            it.resourceId == "drop_text" && normalize(it.text).contains("drop location is $wanted")
+        }
+        if (queryShown) {
+            return inspectExactLocationResult(screen, "drop_text", "Drop Location is ",
+                request.destination, Stage.VEHICLE)
+        }
         val results = screen.elements.filter { e ->
             !e.editable && e.text.isNotBlank() &&
                 normalize(e.text).startsWith("$wanted,")
         }.distinctBy { normalize(it.text) }
-        if (results.size > 1) return Decision.Stop("Several destinations match; choose one in Rapido")
+        if (results.size > 1) return unmatchedResult(Stage.VEHICLE)
         val result = results.singleOrNull() ?: return Decision.Wait
-        return Decision.Tap(result.text, Stage.VEHICLE)
+        return Decision.Tap(result.text, result.bounds, Stage.VEHICLE)
+    }
+
+    private fun inspectExactLocationResult(screen: ScreenSnapshot, fieldId: String,
+        prefix: String, place: String, next: Stage): Decision {
+        val queryShown = screen.elements.any {
+            it.resourceId == fieldId && normalize(it.text).startsWith(normalize(prefix + place))
+        }
+        if (!queryShown) return Decision.Wait
+        val rows = screen.elements.filter { it.text.matches(Regex("Item \\d+ of \\d+")) }
+            .sortedBy { it.text.substringAfter("Item ").substringBefore(" of").toIntOrNull() ?: Int.MAX_VALUE }
+        val wanted = normalize(place)
+        val titledRows = rows.map { row -> row to screen.elements.filter {
+                it.className == "TextView" && containsCenter(row.bounds, it.bounds)
+            }.minByOrNull { it.bounds.top } }
+        val ranked = titledRows.mapNotNull { (row, title) ->
+            if (title == null) return@mapNotNull null
+            val actual = normalize(title.text)
+            val score = when {
+                actual == wanted -> 3
+                actual.startsWith("$wanted ") -> 2
+                actual.contains(" $wanted ") -> 1
+                else -> 0
+            }
+            if (score < 2) null else Triple(row, title, score)
+        }
+        val best = ranked.maxOfOrNull { it.third } ?: return if (rows.isEmpty() ||
+            titledRows.firstOrNull()?.second == null) Decision.Wait else unmatchedResult(next)
+        val chosen = ranked.first { it.third == best }
+        // Rapido briefly inserts unnamed placeholder rows while its search
+        // results load. A match below one can shift upward before a gesture
+        // arrives, causing the tap to hit a different row.
+        val chosenIndex = rows.indexOf(chosen.first)
+        if (titledRows.take(chosenIndex).any { it.second == null }) return Decision.Wait
+        val signature = "${rows.size}:${chosenIndex}:${chosen.second.text}:${chosen.second.bounds.toShortString()}"
+        if (resultSignature != signature) {
+            resultSignature = signature
+            stableResultReads = 1
+            return Decision.Wait
+        }
+        if (++stableResultReads < 2) return Decision.Wait
+        unmatchedResultReads = 0
+        // Rapido orders its search results by relevance. For equal scores,
+        // use the first visible row, as requested by the user.
+        // Tap the title itself: a row-centre gesture can land in blank space
+        // on Rapido's search-result card without opening that location.
+        val title = chosen.second
+        return Decision.Tap(title.text, title.bounds, next)
+    }
+
+    private fun unmatchedResult(next: Stage): Decision {
+        unmatchedResultReads++
+        val limit = if (stage == Stage.VEHICLE || stage == Stage.BOOKING_FOR) 12 else 5
+        return if (unmatchedResultReads >= limit) Decision.ManualSelection(next) else Decision.Wait
+    }
+
+    private fun inspectManualResult(screen: ScreenSnapshot): Decision = when (manualNext) {
+        Stage.BOOKING_FOR -> {
+            if (screen.elements.none { it.resourceId == "bfse_title" && it.text == "Booking for someone else?" }) {
+                Decision.Wait
+            } else {
+                stage = Stage.BOOKING_FOR
+                inspectBookingFor(screen)
+            }
+        }
+        Stage.VEHICLE -> {
+            if (screen.elements.none { it.text == "Choose your ride Screen" }) Decision.Wait
+            else {
+                // The human picked a Rapido row after we requested help.
+                destinationSelected = true
+                stage = Stage.FARE
+                inspectFare(screen)
+            }
+        }
+        else -> Decision.Stop("Manual result stage has no target")
     }
 
     private fun inspectVehicle(screen: ScreenSnapshot): Decision {
-        val name = request.vehicle.label
-        val matches = screen.elements.filter { e ->
-            val t = normalize(e.text)
-            t == name.lowercase() || t == "rapido ${name.lowercase()}" ||
-                t == "${name.lowercase()} ride"
-        }.distinctBy { normalize(it.text) }
-        if (matches.size > 1) return Decision.Stop("Several $name options are visible")
-        val tile = matches.singleOrNull() ?: return Decision.Wait
-        return Decision.Tap(tile.text, Stage.FARE)
+        if (screen.elements.none { it.text == "Choose your ride Screen" }) {
+            return if (screen.elements.any { it.resourceId == "drop_text" } &&
+                screen.elements.any { it.text.matches(Regex("Item \\d+ of \\d+")) }) {
+                unmatchedResult(Stage.VEHICLE)
+            } else Decision.Wait
+        }
+        stage = Stage.FARE
+        return inspectFare(screen)
     }
 
     private fun inspectFare(screen: ScreenSnapshot): Decision {
-        val labels = screen.elements.map { it.text }.filter { it.isNotBlank() }
-        val destinationShown = labels.any { normalize(it).contains(normalize(request.destination)) }
-        val vehicleShown = labels.any { normalize(it) == request.vehicle.label.lowercase() ||
-            normalize(it) == "rapido ${request.vehicle.label.lowercase()}" }
-        val bookShown = labels.any { Regex("(?i)\\bbook\\b|बुक").containsMatchIn(it) }
-        if (!destinationShown || !vehicleShown || !bookShown) return Decision.Wait
-        val prices = labels.flatMap { FARE.findAll(it).map { m -> m.value }.toList() }.distinct()
-        if (prices.size > 1) return Decision.Stop("Several fares are visible; please check Rapido")
-        val fare = prices.singleOrNull() ?: return Decision.Wait
-        stage = Stage.DONE
-        return Decision.Preview(
-            "रैपिडो में ${request.destination} के लिए ${request.vehicle.label} का किराया $fare दिख रहा है। " +
-                "पिकअप पिन और पूरी जगह ऐप में जाँच लें। मैंने बुकिंग नहीं की है।"
-        )
+        if (!destinationSelected) return Decision.Stop("Destination was not selected by this flow")
+        if (screen.elements.none { it.text == "Choose your ride Screen" }) return Decision.Wait
+        actualCabLabel = when {
+            fareRowByLabel(screen, "Cab Daily") != null -> "Cab Daily"
+            fareRowByLabel(screen, "Cab Economy") != null -> "Cab Economy"
+            else -> return Decision.Wait
+        }
+        val fares = LinkedHashMap<RapidoIntent.Vehicle, String>()
+        for (vehicle in RapidoIntent.Vehicle.entries) {
+            val row = fareRow(screen, vehicle) ?: return Decision.Wait
+            val fare = singleFare(row.text) ?: return Decision.Stop("Unclear ${vehicle.label} fare")
+            fares[vehicle] = fare
+        }
+        if (screen.elements.count { it.resourceId == "fe_book_now_btn" } != 1) return Decision.Wait
+        quotedFares = fares
+        stage = Stage.AWAIT_CHOICE
+        return Decision.Preview("रैपिडो में बाइक का किराया ${fares[RapidoIntent.Vehicle.BIKE]}, " +
+            "ऑटो का किराया ${fares[RapidoIntent.Vehicle.AUTO]}, और कैब का किराया ${fares[RapidoIntent.Vehicle.CAB]} है। " +
+            "आप कौन सी बुक करना चाहती हैं? बाइक, ऑटो या कैब बोलें।")
     }
+
+    private fun inspectBookSelect(screen: ScreenSnapshot): Decision {
+        if (!destinationSelected || screen.elements.none { it.text == "Choose your ride Screen" }) return Decision.Wait
+        val vehicle = chosenVehicle ?: return Decision.Stop("No spoken vehicle choice")
+        val row = fareRow(screen, vehicle) ?: return Decision.Wait
+        if (singleFare(row.text) != quotedFares[vehicle]) return Decision.Stop("Fare changed after quote")
+        if (row.text.endsWith(".Selected.")) {
+            stage = Stage.BOOK_READY
+            return inspectBookReady(screen)
+        }
+        return Decision.Tap(row.text, row.bounds, Stage.BOOK_READY)
+    }
+
+    private fun inspectBookReady(screen: ScreenSnapshot): Decision {
+        if (!destinationSelected || screen.elements.none { it.text == "Choose your ride Screen" }) return Decision.Wait
+        val vehicle = chosenVehicle ?: return Decision.Stop("No spoken vehicle choice")
+        val row = fareRow(screen, vehicle) ?: return Decision.Wait
+        val fare = singleFare(row.text) ?: return Decision.Stop("Selected fare is unclear")
+        if (fare != quotedFares[vehicle]) return Decision.Stop("Fare changed after quote")
+        if (!row.text.endsWith(".Selected.")) return Decision.Wait
+        val actualLabel = labelFor(vehicle)
+        val button = screen.elements.filter {
+            it.resourceId == "fe_book_now_btn" && it.text == "Double tap to book $actualLabel"
+        }
+        if (button.size != 1) return Decision.Wait
+        return Decision.Book(vehicle, actualLabel, fare, button.single().bounds)
+    }
+
+    private fun labelFor(vehicle: RapidoIntent.Vehicle): String =
+        if (vehicle == RapidoIntent.Vehicle.CAB) actualCabLabel ?: "Cab Daily" else vehicle.label
+
+    private fun fareRow(screen: ScreenSnapshot, vehicle: RapidoIntent.Vehicle): ScreenElement? =
+        fareRowByLabel(screen, labelFor(vehicle))
+
+    private fun fareRowByLabel(screen: ScreenSnapshot, label: String): ScreenElement? {
+        val rows = screen.elements.filter {
+            it.text.startsWith("$label ride. Estimated fare ") &&
+                (it.text.endsWith(".Selected.") || it.text.endsWith(".Not selected."))
+        }.distinctBy { it.bounds }
+        if (rows.size != 1) return null
+        val row = rows.single()
+        return row.takeIf { screen.elements.any {
+            it.resourceId == "fe_list_item_$label" && sameBounds(it.bounds, row.bounds)
+        } }
+    }
+
+    private fun singleFare(text: String): String? =
+        FARE.findAll(text).map { it.value }.distinct().toList().singleOrNull()
 
     private fun ScreenElement.matchesAny(vararg labels: String): Boolean =
         labels.any { normalize(text) == normalize(it) }
 
     private fun normalize(text: String): String = text.trim().lowercase()
         .replace(Regex("[?।]"), "").replace(Regex("\\s+"), " ")
+
+    private fun containsCenter(outer: Rect, inner: Rect): Boolean {
+        val x = inner.left + (inner.right - inner.left) / 2
+        val y = inner.top + (inner.bottom - inner.top) / 2
+        return x >= outer.left && x < outer.right && y >= outer.top && y < outer.bottom
+    }
+
+    private fun sameBounds(a: Rect, b: Rect): Boolean =
+        a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom
 
     companion object {
         const val RAPIDO_PACKAGE = "com.rapido.passenger"

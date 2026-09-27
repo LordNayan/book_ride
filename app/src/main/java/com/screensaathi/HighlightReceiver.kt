@@ -46,6 +46,11 @@ class HighlightReceiver : BroadcastReceiver() {
                         "click=${e.clickable} edit=${e.editable} bounds=${e.bounds.toShortString()}"
                     if (filter.isEmpty() || line.lowercase().contains(filter)) Log.w(TAG, "  $line")
                 }
+                if (intent.getBooleanExtra("actions", false)) {
+                    ScreenReaderService.instance?.rapidoActionsForDebug(filter)?.forEach {
+                        Log.w(TAG, "  RAPIDO_ACTIONS $it")
+                    }
+                }
             }
             ACTION_CLEAR -> {
                 Log.d(TAG, "HIGHLIGHT_CLEAR")

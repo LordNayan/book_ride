@@ -99,6 +99,22 @@ class SessionController(
     private val tasks: TaskRepository = TaskRepository.load(context)
     private var engine: StepEngine? = null
     @Volatile private var ridePreview: RapidoPreview? = null
+    @Volatile private var pendingFareFlow: RapidoPreview? = null
+    @Volatile private var rapidoManaged = false
+    @Volatile private var pendingPickupRequest: RapidoIntent? = null
+    @Volatile private var awaitingPickupPlace = false
+
+    /** Set while waiting for the spoken "haan"/"nahi" that gates the Book tap. */
+    @Volatile private var pendingBookConfirm: RapidoPreview? = null
+    @Volatile private var pendingBookMessage: String = ""
+    /** True only for the one poll right after a spoken "haan", so the next
+     * Decision.Book taps instead of asking again. */
+    @Volatile private var bookConfirmed = false
+
+    /** Consecutive misheard answers to the SAME question; reset whenever the
+     * flow moves to a new question. Caps the re-ask loop so a run of bad ASR
+     * ends the flow gracefully instead of repeating the same prompt forever. */
+    @Volatile private var promptRetries = 0
 
     private val recorder = WavRecorder()
     private val localSpeech = OnDeviceHindiSpeech(context)
@@ -183,6 +199,8 @@ class SessionController(
      */
     fun micLevel(): Float = if (isRecording) recorder.level else 0f
 
+    fun managesRapidoKeyboard(): Boolean = rapidoManaged && !stopped
+
     fun onMicTapped() {
         if (localBusy) {
             if (localListening) {
@@ -197,15 +215,47 @@ class SessionController(
         startLocalListening()
     }
 
+    /** Begin a voice-first ride request when the user opens the assistant. */
+    fun promptForDestination() {
+        val turn = newTurn()
+        localSpeech.cancel()
+        localBusy = false
+        localListening = false
+        deviceTts.stop()
+        stopped = false
+        ridePreview = null
+        rapidoManaged = false
+        pendingFareFlow = null
+        pendingPickupRequest = null
+        awaitingPickupPlace = false
+        pendingBookConfirm = null
+        pendingBookMessage = ""
+        bookConfirmed = false
+        promptRetries = 0
+        if (!hasMicPermission()) {
+            finishRidePreview(turn, "पहले माइक्रोफ़ोन की अनुमति दें।", failed = true)
+            return
+        }
+        val question = Spoken("कहाँ जाना है? जगह का नाम बोलें, जैसे विजय नगर।", "hi-IN")
+        renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+            instruction = question.text, language = question.language))
+        speakThenListen(question, turn)
+    }
+
     /** Debug APK shortcut for exercising the Rapido UI executor without ASR. */
-    fun previewSpokenDestinationForDebug(text: String) {
+    fun previewSpokenDestinationForDebug(text: String, pickup: String? = null) {
         if (!com.screensaathi.BuildConfig.DEBUG) return
         val turn = newTurn()
+        promptRetries = 0
         val request = RapidoIntent.parse(text)
         if (request == null) {
             finishRidePreview(turn, "जगह समझ नहीं आई।", failed = true)
         } else {
-            bg.post { if (isCurrent(turn)) startRidePreview(request, turn) }
+            bg.post {
+                if (!isCurrent(turn)) return@post
+                if (pickup == null) askRidePickup(request, turn)
+                else startRidePreview(request.copy(pickupLocation = pickup.takeUnless { it == "current" }), turn)
+            }
         }
     }
 
@@ -222,22 +272,108 @@ class SessionController(
         }
         localBusy = true
         localListening = true
+        val question = when {
+            pendingBookConfirm != null -> pendingBookMessage
+            pendingFareFlow != null -> "कौन सी बुक करूँ? बाइक, ऑटो या कैब?"
+            pendingPickupRequest == null -> "कहाँ जाना है?"
+            awaitingPickupPlace -> "पिकअप कहाँ से चाहिए?"
+            else -> "पिकअप आपकी अभी की जगह से चाहिए या दूसरी जगह से?"
+        }
         renderIfCurrent(turn, OverlayCommand(PillState.LISTENING, expanded = true,
-            instruction = "कहाँ जाना है?", language = "hi-IN"))
+            instruction = question, language = "hi-IN"))
         localSpeech.start(
             onResult = { text ->
+                if (com.screensaathi.BuildConfig.DEBUG) Log.d(TAG, "Offline Hindi heard: '$text'")
                 localBusy = false
                 localListening = false
                 bg.post {
                     if (!isCurrent(turn) || stopped) return@post
+                    val ridingFlowActive = pendingBookConfirm != null || pendingFareFlow != null ||
+                        pendingPickupRequest != null
+                    if (ridingFlowActive && RapidoIntent.isCancel(text)) {
+                        cancelRideFlow(turn)
+                        return@post
+                    }
+                    pendingBookConfirm?.let { flow ->
+                        when (RapidoIntent.confirmation(text)) {
+                            true -> {
+                                promptRetries = 0
+                                pendingBookConfirm = null
+                                bookConfirmed = true
+                                ridePreview = flow
+                                val message = "ठीक है, बुक कर रही हूँ।"
+                                renderIfCurrent(turn, OverlayCommand(PillState.THINKING, expanded = true,
+                                    instruction = message, language = "hi-IN"))
+                                speech.post { speak(Spoken(message, "hi-IN"), turn) }
+                                pollRidePreview(flow, turn, SystemClock.uptimeMillis())
+                            }
+                            false -> cancelRideFlow(turn)
+                            null -> if (!retryOrGiveUp(turn)) askBookConfirmation(flow, pendingBookMessage, turn)
+                        }
+                        return@post
+                    }
+                    pendingFareFlow?.let { flow ->
+                        val vehicle = RapidoIntent.bookingVehicle(text)
+                        if (vehicle == null || !flow.choose(vehicle)) {
+                            if (!retryOrGiveUp(turn)) askFareChoice(flow, turn)
+                        } else {
+                            promptRetries = 0
+                            pendingFareFlow = null
+                            ridePreview = flow
+                            val message = "${vehicle.spokenName} चुनी है। रैपिडो में बुक कर रही हूँ।"
+                            renderIfCurrent(turn, OverlayCommand(PillState.THINKING, expanded = true,
+                                instruction = message, language = "hi-IN"))
+                            speech.post { speak(Spoken(message, "hi-IN"), turn) }
+                            pollRidePreview(flow, turn, SystemClock.uptimeMillis())
+                        }
+                        return@post
+                    }
+                    pendingPickupRequest?.let { request ->
+                        if (awaitingPickupPlace) {
+                            val place = RapidoIntent.pickupPlace(text)
+                            if (place == null) {
+                                if (!retryOrGiveUp(turn)) askPickupPlace(request, turn)
+                            } else {
+                                promptRetries = 0
+                                pendingPickupRequest = null
+                                awaitingPickupPlace = false
+                                startRidePreview(request.copy(pickupLocation = place), turn)
+                            }
+                        } else {
+                            when (RapidoIntent.pickupChoice(text)) {
+                                RapidoIntent.PickupChoice.CURRENT -> {
+                                    promptRetries = 0
+                                    pendingPickupRequest = null
+                                    startRidePreview(request, turn)
+                                }
+                                RapidoIntent.PickupChoice.OTHER -> {
+                                    promptRetries = 0
+                                    askPickupPlace(request, turn)
+                                }
+                                null -> if (!retryOrGiveUp(turn)) askRidePickup(request, turn)
+                            }
+                        }
+                        return@post
+                    }
                     val request = RapidoIntent.parse(text)
                     if (request == null) {
-                        finishRidePreview(turn,
-                            "जगह समझ नहीं आई। जैसे बोलें: राजवाड़ा जाना है।", failed = true)
-                    } else startRidePreview(request, turn)
+                        if (com.screensaathi.BuildConfig.DEBUG) {
+                            Log.w(TAG, "Offline Hindi destination rejected: '$text'")
+                        }
+                        if (!retryOrGiveUp(turn)) {
+                            val retry = Spoken("जगह समझ नहीं आई। फिर से बोलें, जैसे राजवाड़ा जाना है।", "hi-IN")
+                            renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+                                instruction = retry.text, language = retry.language))
+                            speakThenListen(retry, turn)
+                        }
+                    } else {
+                        promptRetries = 0
+                        askRidePickup(request, turn)
+                    }
                 }
             },
             onFailure = { message ->
+                Log.w(TAG, "Offline Hindi recognition failed: $message")
                 localBusy = false
                 localListening = false
                 bg.post { finishRidePreview(turn, message, failed = true) }
@@ -304,6 +440,14 @@ class SessionController(
         abandonRecording(turn)
         stopped = true
         ridePreview = null
+        rapidoManaged = false
+        pendingFareFlow = null
+        pendingPickupRequest = null
+        awaitingPickupPlace = false
+        pendingBookConfirm = null
+        pendingBookMessage = ""
+        bookConfirmed = false
+        promptRetries = 0
         player.stop()
         deviceTts.stop()
         currentHighlight = null
@@ -473,7 +617,7 @@ class SessionController(
         // spoken destination, never the open-ended planner's action proposal.
         val rideRequest = RapidoIntent.parse(sttResult.transcript)
         if (rideRequest != null) {
-            startRidePreview(rideRequest, turn)
+            askRidePickup(rideRequest, turn)
             return
         }
 
@@ -1433,7 +1577,34 @@ class SessionController(
 
     @Volatile private var lastUserClickAt: Long = 0L
 
+    private fun askRidePickup(request: RapidoIntent, turn: Int) {
+        if (!isCurrent(turn) || stopped) return
+        pendingPickupRequest = request
+        awaitingPickupPlace = false
+        val question = Spoken("पिकअप आपकी अभी की जगह से चाहिए या किसी दूसरी जगह से?", "hi-IN")
+        renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+            instruction = question.text, language = question.language))
+        speakThenListen(question, turn)
+    }
+
+    private fun askPickupPlace(request: RapidoIntent, turn: Int) {
+        if (!isCurrent(turn) || stopped) return
+        pendingPickupRequest = request
+        awaitingPickupPlace = true
+        val question = Spoken("पिकअप किस जगह से चाहिए? जगह का नाम बोलें, जैसे पलासिया।", "hi-IN")
+        renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+            instruction = question.text, language = question.language))
+        speakThenListen(question, turn)
+    }
+
     private fun startRidePreview(request: RapidoIntent, turn: Int) {
+        pendingPickupRequest = null
+        awaitingPickupPlace = false
+        pendingFareFlow = null
+        pendingBookConfirm = null
+        pendingBookMessage = ""
+        bookConfirmed = false
+        promptRetries = 0
         engine = null
         stopped = false
         currentHighlight = null
@@ -1442,13 +1613,15 @@ class SessionController(
         clearHighlightInstant()
         val flow = RapidoPreview(request)
         ridePreview = flow
-        val intro = Spoken("${request.destination} के लिए रैपिडो में ${request.vehicle.label} देख रही हूँ।", "hi-IN")
+        rapidoManaged = true
+        val pickupPhrase = request.pickupLocation?.let { "$it से" } ?: "आपकी अभी की जगह से"
+        val intro = Spoken("$pickupPhrase ${request.destination} तक रैपिडो में ${request.vehicle.label} का किराया देख रही हूँ।", "hi-IN")
         renderIfCurrent(turn, OverlayCommand(PillState.THINKING, expanded = true,
             instruction = intro.text, language = intro.language))
         speech.post { speak(intro, turn) }
         bg.post {
             if (!isCurrent(turn) || stopped || ridePreview !== flow) return@post
-            if (!RideApps.launch(context, RapidoPreview.RAPIDO_PACKAGE)) {
+            if (!RideApps.restartTask(context, RapidoPreview.RAPIDO_PACKAGE)) {
                 finishRidePreview(turn, "इस फ़ोन पर रैपिडो नहीं खुल रहा है।", failed = true)
                 return@post
             }
@@ -1458,12 +1631,27 @@ class SessionController(
 
     private fun pollRidePreview(flow: RapidoPreview, turn: Int, startedAt: Long) {
         if (!isCurrent(turn) || stopped || ridePreview !== flow) return
+        ScreenReaderService.instance?.dismissRapidoKeyboard()
         if (SystemClock.uptimeMillis() - startedAt > RIDE_PREVIEW_TIMEOUT_MS) {
+            flow.manualSelectionOnTimeout()?.let {
+                promptManualSelection(flow, it, turn)
+                return
+            }
+            Log.w(TAG, "Rapido preview timed out at ${flow.stage}")
             finishRidePreview(turn, "रैपिडो में सही किराया स्क्रीन नहीं मिल सकी। कृपया ऐप में जाँचें।", failed = true)
             return
         }
         val reader = ScreenReaderService.instance
-        val decision = flow.inspect(reader?.snapshot() ?: ScreenSnapshot.EMPTY)
+        if (reader?.imeTopPx() != 0 && (flow.stage == RapidoPreview.Stage.RESULTS ||
+                flow.stage == RapidoPreview.Stage.PICKUP_RESULTS)) {
+            bg.postDelayed({ pollRidePreview(flow, turn, startedAt) }, RIDE_PREVIEW_POLL_MS)
+            return
+        }
+        val rapidoScreen = reader?.snapshot() ?: ScreenSnapshot.EMPTY
+        val decision = flow.inspect(rapidoScreen)
+        if (com.screensaathi.BuildConfig.DEBUG && decision !is RapidoPreview.Decision.Wait) {
+            Log.d(TAG, "Rapido preview ${flow.stage}: ${decision.javaClass.simpleName}")
+        }
         when (decision) {
             RapidoPreview.Decision.Wait -> Unit
             is RapidoPreview.Decision.Stop -> {
@@ -1471,31 +1659,83 @@ class SessionController(
                 finishRidePreview(turn, "रैपिडो में कई विकल्प या अधूरी जानकारी दिख रही है। कृपया ऐप में चुनें।", failed = true)
                 return
             }
+            is RapidoPreview.Decision.ManualSelection -> {
+                promptManualSelection(flow, decision, turn)
+                return
+            }
             is RapidoPreview.Decision.Tap -> {
-                if (reader?.tapRapidoLabel(decision.label) != true) {
+                if (reader?.tapRapidoLabel(decision.label, decision.bounds) != true) {
                     finishRidePreview(turn, "रैपिडो का अगला विकल्प सुरक्षित ढंग से नहीं चुन सकी।", failed = true)
                     return
                 }
+                if (!isCurrent(turn) || stopped) return
                 flow.advanced(decision.next)
             }
             is RapidoPreview.Decision.Type -> {
-                if (reader?.typeRapidoDestination(decision.bounds, decision.value) != true) {
+                if (reader?.typeRapidoLocation(decision.bounds, decision.value, decision.fieldId) != true) {
                     finishRidePreview(turn, "रैपिडो में जगह नहीं लिख सकी।", failed = true)
                     return
                 }
+                if (!isCurrent(turn) || stopped) return
                 flow.advanced(decision.next)
             }
             is RapidoPreview.Decision.Preview -> {
-                finishRidePreview(turn, decision.message, failed = false)
+                ridePreview = null
+                pendingFareFlow = flow
+                renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+                    instruction = decision.message, language = "hi-IN"))
+                speakThenListen(Spoken(decision.message, "hi-IN"), turn)
+                return
+            }
+            is RapidoPreview.Decision.Book -> {
+                // A fresh spoken "haan" is required before the very tap that
+                // commits money. bookConfirmed is true for exactly the one
+                // poll right after that "haan"; every earlier poll re-derives
+                // this same Decision.Book from the live screen and asks again
+                // instead of tapping, so the vehicle/fare/button are rechecked
+                // right up to the confirmed tap.
+                if (!bookConfirmed) {
+                    ridePreview = null
+                    val message = "${decision.vehicle.spokenName} बुक कर दूँ? किराया ${decision.fare} है। " +
+                        "हाँ या नहीं बोलें।"
+                    askBookConfirmation(flow, message, turn)
+                    return
+                }
+                bookConfirmed = false
+                if (reader?.bookRapidoRide(decision.actualLabel, decision.fare, decision.bounds) != true) {
+                    finishRidePreview(turn, "रैपिडो का बुकिंग बटन सुरक्षित ढंग से नहीं दबा सकी। कृपया ऐप में देखें।", failed = true)
+                    return
+                }
+                if (!isCurrent(turn) || stopped) return
+                flow.advanced(RapidoPreview.Stage.DONE)
+                finishRidePreview(turn,
+                    "${decision.vehicle.spokenName} की बुकिंग रैपिडो को भेज दी है। ऐप में पुष्टि और पिकअप पिन जाँच लें।",
+                    failed = false)
                 return
             }
         }
         bg.postDelayed({ pollRidePreview(flow, turn, startedAt) }, RIDE_PREVIEW_POLL_MS)
     }
 
+    private fun promptManualSelection(flow: RapidoPreview,
+        decision: RapidoPreview.Decision.ManualSelection, turn: Int) {
+        if (!isCurrent(turn) || stopped || ridePreview !== flow) return
+        flow.awaitManualSelection(decision.next)
+        val message = if (decision.next == RapidoPreview.Stage.BOOKING_FOR) {
+            "पिकअप की सही जगह अपने आप नहीं चुन सकी। रैपिडो की सूची में सही जगह पर टैप करें।"
+        } else {
+            "जाने की सही जगह अपने आप नहीं चुन सकी। रैपिडो की सूची में सही जगह पर टैप करें।"
+        }
+        renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+            instruction = message, language = "hi-IN"))
+        speech.post { speak(Spoken(message, "hi-IN"), turn) }
+        bg.postDelayed({ pollRidePreview(flow, turn, SystemClock.uptimeMillis()) }, RIDE_PREVIEW_POLL_MS)
+    }
+
     private fun finishRidePreview(turn: Int, message: String, failed: Boolean) {
         if (!isCurrent(turn) || stopped) return
         ridePreview = null
+        pendingFareFlow = null
         val spoken = Spoken(message, "hi-IN")
         renderIfCurrent(turn, OverlayCommand(
             if (failed) PillState.ERROR else PillState.GUIDING,
@@ -1503,10 +1743,68 @@ class SessionController(
         speech.post { speak(spoken, turn) }
     }
 
-    /** Runs on [speech]. Never on the thread that resolves the highlight. */
-    private fun speak(spoken: Spoken, turn: Int) {
+    private fun askFareChoice(flow: RapidoPreview, turn: Int) {
         if (!isCurrent(turn) || stopped) return
-        deviceTts.speak(spoken)
+        pendingFareFlow = flow
+        val question = Spoken("माफ़ कीजिए, कौन सी बुक करूँ? बाइक, ऑटो या कैब बोलें।", "hi-IN")
+        renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+            instruction = question.text, language = question.language))
+        speakThenListen(question, turn)
+    }
+
+    /** Ask for the explicit "haan"/"nahi" that gates the actual Book tap. */
+    private fun askBookConfirmation(flow: RapidoPreview, message: String, turn: Int) {
+        if (!isCurrent(turn) || stopped) return
+        pendingBookConfirm = flow
+        pendingBookMessage = message
+        renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
+            instruction = message, language = "hi-IN"))
+        speakThenListen(Spoken(message, "hi-IN"), turn)
+    }
+
+    /** Abandon the whole ride flow, either on an explicit spoken "cancel" or
+     * after too many misheard answers to the same question. */
+    private fun cancelRideFlow(turn: Int, message: String = "ठीक है, बुकिंग रद्द कर दी।") {
+        pendingBookConfirm = null
+        pendingBookMessage = ""
+        bookConfirmed = false
+        pendingFareFlow = null
+        pendingPickupRequest = null
+        awaitingPickupPlace = false
+        promptRetries = 0
+        finishRidePreview(turn, message, failed = false)
+    }
+
+    /** True once the same question has been misheard too many times in a
+     * row, and the flow has been cancelled as a result. False leaves it to
+     * the caller to re-ask. */
+    private fun retryOrGiveUp(turn: Int): Boolean {
+        if (++promptRetries > MAX_PROMPT_RETRIES) {
+            cancelRideFlow(turn, "बार-बार समझ नहीं आया। रुक रही हूँ। फिर से बोलकर शुरू करें।")
+            return true
+        }
+        return false
+    }
+
+    private fun speakThenListen(question: Spoken, turn: Int) {
+        speech.post {
+            speak(question, turn) {
+                main.post {
+                    // A tap during the prompt opens a newer turn and cancels
+                    // this automatic start. The microphone never overlaps TTS.
+                    if (isCurrent(turn) && !stopped && !localBusy) {
+                        Log.d(TAG, "Voice prompt completed; starting offline listening")
+                        startLocalListening()
+                    }
+                }
+            }
+        }
+    }
+
+    /** Runs on [speech]. Never on the thread that resolves the highlight. */
+    private fun speak(spoken: Spoken, turn: Int, onComplete: (() -> Unit)? = null) {
+        if (!isCurrent(turn) || stopped) return
+        deviceTts.speak(spoken, onComplete)
     }
 
     /**
@@ -1642,6 +1940,7 @@ class SessionController(
 
     fun dispose() {
         turnId.incrementAndGet() // invalidate anything still in flight
+        rapidoManaged = false
         main.post { localSpeech.cancel() }
         player.stop()
         deviceTts.close()
@@ -1675,10 +1974,13 @@ class SessionController(
         private const val REPLAN_SETTLE_MS = 1_200L
 
         private const val MIN_SPEECH_MS = 400L
-        private const val RIDE_PREVIEW_TIMEOUT_MS = 35_000L
+        private const val RIDE_PREVIEW_TIMEOUT_MS = 60_000L
         private const val RIDE_PREVIEW_POLL_MS = 350L
 
         /** Longest single-tap capture before it is closed automatically. */
         private const val MAX_UTTERANCE_MS = 7_000L
+
+        /** Consecutive misheard answers to the same question before giving up. */
+        private const val MAX_PROMPT_RETRIES = 2
     }
 }

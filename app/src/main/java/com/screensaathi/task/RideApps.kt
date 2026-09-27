@@ -60,6 +60,23 @@ object RideApps {
         }
     }
 
+    /** Starts a fresh ride-app task for a new booking conversation. */
+    fun restartTask(context: Context, packageName: String): Boolean {
+        val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+        if (intent == null) {
+            Log.w(TAG, "No launch intent for $packageName")
+            return false
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
+        return try {
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "Cannot restart task for $packageName: ${e.message}")
+            false
+        }
+    }
+
     fun labelFor(packageName: String): String = KNOWN[packageName] ?: packageName
 
     /** The declared package set — must stay in sync with AndroidManifest's <queries>. */

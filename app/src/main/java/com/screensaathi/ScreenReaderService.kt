@@ -1,19 +1,29 @@
 package com.screensaathi
 
 import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.Path
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.screensaathi.screen.ScreenElement
 import com.screensaathi.screen.ScreenSnapshot
+import com.screensaathi.rapido.PlaceNameNormalizer
 import com.screensaathi.session.SessionController
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Read-only screen context. Walks the live accessibility tree of the foreground
- * app into a flat indexed snapshot (contracts/accessibility.schema.json),
- * filtering out our own overlay package. No gestures, no screenshots — point
- * and speak only.
+ * Walks the live accessibility tree of the foreground app into a flat indexed
+ * snapshot (contracts/accessibility.schema.json), filtering out our overlay.
+ * Rapido preview also uses bounded gestures on controls rechecked here.
  *
  * `lastEventUptime` gives a debounced "screen settled" signal so the highlight
  * never lands mid-transition.
@@ -22,6 +32,22 @@ class ScreenReaderService : AccessibilityService() {
 
     @Volatile
     private var lastEventUptime: Long = 0L
+    @Volatile private var rapidoTyping = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val closeRapidoIme = Runnable {
+        if (rapidoTyping || SessionController.instance?.managesRapidoKeyboard() != true) return@Runnable
+        if (imeTopPx() == 0) return@Runnable
+        val rapidoVisible = try {
+            windows.any { it.root?.packageName?.toString() == "com.rapido.passenger" }
+        } catch (_: Exception) { false }
+        if (rapidoVisible) performGlobalAction(GLOBAL_ACTION_BACK)
+    }
+
+    /** Leave the search list visible without dismissing the keyboard during Paste. */
+    fun dismissRapidoKeyboard() {
+        mainHandler.removeCallbacks(closeRapidoIme)
+        mainHandler.postDelayed(closeRapidoIme, 150L)
+    }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -45,6 +71,7 @@ class ScreenReaderService : AccessibilityService() {
                 lastEventUptime = SystemClock.uptimeMillis()
                 SessionController.instance?.onWindowStateChanged()
                 OverlayService.onSystemWindowsChanged()
+                dismissRapidoKeyboard()
             }
 
             // The keyboard opening or closing arrives here, not as an inset on
@@ -52,6 +79,7 @@ class ScreenReaderService : AccessibilityService() {
             // out of the IME's way.
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
                 OverlayService.onSystemWindowsChanged()
+                dismissRapidoKeyboard()
             }
 
             // The user physically tapped something. That — not a timer, and not
@@ -163,6 +191,32 @@ class ScreenReaderService : AccessibilityService() {
         return ScreenSnapshot(pkg, isSettled(), elements)
     }
 
+    /** Debug-only detail that uiautomator's XML omits: actions on matching nodes. */
+    fun rapidoActionsForDebug(filter: String): List<String> {
+        if (!BuildConfig.DEBUG || filter.isBlank()) return emptyList()
+        val root = resolveRoot() ?: return emptyList()
+        if (root.packageName?.toString() != "com.rapido.passenger") return emptyList()
+        val lines = ArrayList<String>()
+        fun visit(node: AccessibilityNodeInfo?) {
+            if (node == null || lines.size >= 10) return
+            val label = listOf(node.text, node.contentDescription, node.hintText)
+                .mapNotNull { it?.toString() }.joinToString(" ")
+            if (label.contains(filter, ignoreCase = true)) {
+                val b = Rect().also { node.getBoundsInScreen(it) }
+                val actions = node.actionList.joinToString { "${it.id}:${it.label ?: ""}" }
+                lines += "label='${label.take(120)}' id=${node.viewIdResourceName} " +
+                    "edit=${node.isEditable} click=${node.isClickable} bounds=$b actions=[$actions]"
+            }
+            for (i in 0 until node.childCount) visit(node.getChild(i))
+        }
+        visit(root)
+        for (window in windows) {
+            if (lines.size >= 10) break
+            visit(window.root)
+        }
+        return lines
+    }
+
     private fun walk(
         node: AccessibilityNodeInfo?,
         out: ArrayList<ScreenElement>,
@@ -236,10 +290,9 @@ class ScreenReaderService : AccessibilityService() {
         return success
     }
 
-    /** Execute only against a unique, freshly visible Rapido control. */
-    fun tapRapidoLabel(label: String): Boolean {
-        if (Regex("(?i)\\b(book|pay|confirm|otp|submit)\\b|बुक|भुगतान|पुष्टि|ओटीपी")
-                .containsMatchIn(label)) return false
+    /** Tap a unique Rapido control at the bounds verified in a settled snapshot. */
+    fun tapRapidoLabel(label: String, bounds: Rect): Boolean {
+        if (RAPIDO_FORBIDDEN.containsMatchIn(label)) return false
         val root = resolveRoot() ?: return false
         if (root.packageName?.toString() != "com.rapido.passenger") return false
         val matches = ArrayList<AccessibilityNodeInfo>()
@@ -247,44 +300,203 @@ class ScreenReaderService : AccessibilityService() {
             if (node == null) return
             val names = listOf(node.text, node.contentDescription, node.hintText)
                 .mapNotNull { it?.toString()?.trim() }
-            if (names.any { it.equals(label, ignoreCase = true) }) {
-                var target: AccessibilityNodeInfo? = node
-                while (target != null && !target.isClickable) target = target.parent
-                if (target != null) matches.add(target)
+            val b = Rect().also { node.getBoundsInScreen(it) }
+            if (b == bounds && names.any { it.equals(label, ignoreCase = true) }) {
+                matches.add(node)
             }
             for (i in 0 until node.childCount) visit(node.getChild(i))
         }
         visit(root)
-        val unique = matches.distinctBy { node ->
-            val bounds = Rect().also { node.getBoundsInScreen(it) }
-            "${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}"
-        }
-        if (unique.size != 1) return false
-        val target = unique.single()
-        val targetLabel = listOf(target.text, target.contentDescription)
-            .mapNotNull { it?.toString() }.joinToString(" ")
-        if (Regex("(?i)\\b(book|pay|confirm|otp|submit)\\b|बुक|भुगतान|पुष्टि|ओटीपी")
-                .containsMatchIn(targetLabel)) return false
-        return target.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        if (matches.size != 1 || bounds.width() < 20 || bounds.height() < 20) return false
+        // Compose reported a successful accessibility click on a search-result
+        // ancestor without navigating. A bounded physical gesture worked on
+        // this same live row, so use it consistently after rechecking the
+        // unique label and guarding booking controls.
+        if (rapidoForbiddenAt(root, bounds.centerX(), bounds.centerY())) return false
+        return rapidoGesture(bounds, 90L)
     }
 
-    /** Enter a destination only into the unique editable field seen in a snapshot. */
-    fun typeRapidoDestination(bounds: Rect, destination: String): Boolean {
+    /** The sole booking capability, called after a fresh spoken vehicle choice. */
+    fun bookRapidoRide(vehicleLabel: String, quotedFare: String, bounds: Rect): Boolean {
+        if (vehicleLabel !in setOf("Bike", "Auto", "Cab Daily", "Cab Economy")) return false
         val root = resolveRoot() ?: return false
         if (root.packageName?.toString() != "com.rapido.passenger") return false
-        val matches = ArrayList<AccessibilityNodeInfo>()
+        var fareScreen = false
+        val selectedRows = ArrayList<AccessibilityNodeInfo>()
+        val rowContainers = ArrayList<AccessibilityNodeInfo>()
+        val buttons = ArrayList<AccessibilityNodeInfo>()
         fun visit(node: AccessibilityNodeInfo?) {
             if (node == null) return
-            val b = Rect().also { node.getBoundsInScreen(it) }
-            if (node.isEditable && b == bounds) matches.add(node)
+            val description = node.contentDescription?.toString().orEmpty()
+            val id = node.viewIdResourceName?.substringAfterLast('/').orEmpty()
+            if (description == "Choose your ride Screen") fareScreen = true
+            if (description.startsWith("$vehicleLabel ride. Estimated fare ") &&
+                description.endsWith(".Selected.")) selectedRows.add(node)
+            if (id == "fe_list_item_$vehicleLabel") rowContainers.add(node)
+            if (id == "fe_book_now_btn" && description == "Double tap to book $vehicleLabel") {
+                buttons.add(node)
+            }
             for (i in 0 until node.childCount) visit(node.getChild(i))
         }
         visit(root)
-        if (matches.size != 1 || destination.isBlank()) return false
-        val args = android.os.Bundle().apply {
-            putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, destination)
+        if (!fareScreen || selectedRows.size != 1 || rowContainers.size != 1 || buttons.size != 1) return false
+        val selected = selectedRows.single()
+        val selectedBounds = Rect().also { selected.getBoundsInScreen(it) }
+        val containerBounds = Rect().also { rowContainers.single().getBoundsInScreen(it) }
+        if (selectedBounds != containerBounds) return false
+        val currentFare = Regex("₹\\s*[0-9][0-9,]*(?:\\.[0-9]{1,2})?")
+            .findAll(selected.contentDescription?.toString().orEmpty()).map { it.value }.toList().singleOrNull()
+        if (currentFare != quotedFare) return false
+        val buttonBounds = Rect().also { buttons.single().getBoundsInScreen(it) }
+        if (buttonBounds != bounds || buttonBounds.width() < 100 || buttonBounds.height() < 50) return false
+        return rapidoGesture(bounds, 90L)
+    }
+
+    /** Enter a location in Rapido's custom Pickup or Drop view. */
+    fun typeRapidoLocation(bounds: Rect, value: String, fieldId: String): Boolean {
+        if (fieldId !in setOf("pickup_text", "drop_text") ||
+            !PlaceNameNormalizer.isEnglishPlace(value)) return false
+        rapidoTyping = true
+        try {
+            val root = resolveRoot() ?: return false
+            if (root.packageName?.toString() != "com.rapido.passenger") return false
+            val matches = ArrayList<AccessibilityNodeInfo>()
+            fun visit(node: AccessibilityNodeInfo?) {
+                if (node == null) return
+                val b = Rect().also { node.getBoundsInScreen(it) }
+                val matchingField = node.viewIdResourceName?.substringAfterLast('/') == fieldId &&
+                    (node.contentDescription?.toString()?.startsWith("Enter ${if (fieldId == "drop_text") "Drop" else "Pickup"} location Input Field.") == true ||
+                        node.contentDescription?.toString()?.startsWith("${if (fieldId == "drop_text") "Drop" else "Pickup"} Location is ") == true)
+                if (b == bounds && matchingField) matches.add(node)
+                for (i in 0 until node.childCount) visit(node.getChild(i))
+            }
+            visit(root)
+            if (matches.size != 1) return false
+            val target = matches.single()
+            if (!target.isEditable) return pasteRapidoLocation(bounds, value, fieldId)
+            val args = android.os.Bundle().apply {
+                putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
+            }
+            return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+        } finally {
+            rapidoTyping = false
+            dismissRapidoKeyboard()
         }
-        return matches.single().performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    private fun pasteRapidoLocation(bounds: Rect, value: String, fieldId: String): Boolean {
+        val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("Ride Helper location", value))
+        if (!rapidoGesture(bounds, 800L)) return false
+        repeat(20) {
+            val rapidoVisible = windows.any {
+                it.root?.packageName?.toString() == "com.rapido.passenger"
+            }
+            if (!rapidoVisible) return false
+            val paste = ArrayList<AccessibilityNodeInfo>()
+            fun find(node: AccessibilityNodeInfo?) {
+                if (node == null) return
+                if (node.text?.toString() == "Paste" || node.contentDescription?.toString() == "Paste") {
+                    var clickable: AccessibilityNodeInfo? = node
+                    while (clickable != null && !clickable.isClickable) clickable = clickable.parent
+                    if (clickable != null) paste.add(clickable)
+                }
+                for (i in 0 until node.childCount) find(node.getChild(i))
+            }
+            // Samsung's floating edit toolbar can be present in the active
+            // tree without appearing in any of the enumerated window roots.
+            find(resolveRoot())
+            for (window in windows) find(window.root)
+            val candidates = paste.distinctBy {
+                Rect().also { b -> it.getBoundsInScreen(b) }.toShortString()
+            }.filter {
+                val b = Rect().also { rect -> it.getBoundsInScreen(rect) }
+                b.centerX() in 0..bounds.right && b.centerY() in (bounds.top - 250)..(bounds.bottom + 250)
+            }
+            if (candidates.size > 1) return false
+            val candidate = candidates.singleOrNull()
+            val pasted = if (candidate == null) false else {
+                val pasteBounds = Rect().also { candidate.getBoundsInScreen(it) }
+                candidate.performAction(AccessibilityNodeInfo.ACTION_CLICK) ||
+                    rapidoGesture(pasteBounds, 90L)
+            }
+            if (pasted) {
+                repeat(20) {
+                    val current = resolveRoot()
+                    if (current?.packageName?.toString() == "com.rapido.passenger") {
+                        val labels = ArrayList<String>()
+                        fun collect(node: AccessibilityNodeInfo?) {
+                            if (node == null) return
+                            if (node.viewIdResourceName?.substringAfterLast('/') == fieldId) {
+                                labels.add(node.contentDescription?.toString().orEmpty())
+                            }
+                            for (i in 0 until node.childCount) collect(node.getChild(i))
+                        }
+                        collect(current)
+                        val prefix = if (fieldId == "drop_text") "Drop" else "Pickup"
+                        if (labels.singleOrNull()?.startsWith("$prefix Location is $value.", ignoreCase = true) == true) {
+                            return true
+                        }
+                    }
+                    Thread.sleep(100)
+                }
+                return false
+            }
+            Thread.sleep(100)
+        }
+        return false
+    }
+
+    private fun rapidoForbiddenAt(root: AccessibilityNodeInfo, x: Int, y: Int): Boolean {
+        fun scan(node: AccessibilityNodeInfo?): Boolean {
+            if (node == null) return false
+            val label = listOf(node.text, node.contentDescription)
+                .mapNotNull { it?.toString() }.joinToString(" ")
+            val b = Rect().also { node.getBoundsInScreen(it) }
+            if (RAPIDO_FORBIDDEN.containsMatchIn(label) && b.contains(x, y)) return true
+            for (i in 0 until node.childCount) if (scan(node.getChild(i))) return true
+            return false
+        }
+        return scan(root)
+    }
+
+    private fun rapidoGesture(bounds: Rect, durationMs: Long): Boolean {
+        val completed = AtomicBoolean(false)
+        val done = CountDownLatch(1)
+        Handler(Looper.getMainLooper()).post {
+            if (resolveRoot()?.packageName?.toString() != "com.rapido.passenger") {
+                done.countDown()
+                return@post
+            }
+            val restorePill = OverlayService.hidePillForRapidoGesture()
+            Handler(Looper.getMainLooper()).postDelayed({
+                if (resolveRoot()?.packageName?.toString() != "com.rapido.passenger") {
+                    restorePill()
+                    done.countDown()
+                    return@postDelayed
+                }
+                val path = Path().apply { moveTo(bounds.centerX().toFloat(), bounds.centerY().toFloat()) }
+                val gesture = GestureDescription.Builder()
+                    .addStroke(GestureDescription.StrokeDescription(path, 0, durationMs))
+                    .build()
+                val started = dispatchGesture(gesture, object : GestureResultCallback() {
+                    override fun onCompleted(gestureDescription: GestureDescription?) {
+                        restorePill()
+                        completed.set(true)
+                        done.countDown()
+                    }
+                    override fun onCancelled(gestureDescription: GestureDescription?) {
+                        restorePill()
+                        done.countDown()
+                    }
+                }, Handler(Looper.getMainLooper()))
+                if (!started) {
+                    restorePill()
+                    done.countDown()
+                }
+            }, 60L)
+        }
+        return done.await(durationMs + 2_500L, TimeUnit.MILLISECONDS) && completed.get()
     }
 
     private fun findNode(node: AccessibilityNodeInfo?, resourceId: String, textAny: List<String>, requiresClickable: Boolean): AccessibilityNodeInfo? {
@@ -324,6 +536,7 @@ class ScreenReaderService : AccessibilityService() {
          */
         private const val MAX_ELEMENTS = 600
         private const val MIN_PX = 4
+        private val RAPIDO_FORBIDDEN = Regex("(?i)\\b(book|pay|confirm|otp|submit)\\b|बुक|भुगतान|पुष्टि|ओटीपी")
 
         /** View ids belonging to the floating overlay itself — never guidance targets. */
         private val OVERLAY_IDS = setOf(

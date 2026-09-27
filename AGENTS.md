@@ -1,10 +1,11 @@
 # Book Ride development notes
 
-This repository is a Rapido fare-preview prototype built from ScreenSaathi.
-The active user flow is: Hindi speech → destination and vehicle → Rapido UI →
-visible fare read aloud → stop. It must never tap Book, Pay, confirmation, or
-OTP controls. A paid Sarvam key is not needed; the mic uses Android's on-device
-Hindi recognizer and TTS uses an installed offline voice.
+This repository is a Hindi voice Rapido prototype built from ScreenSaathi.
+The active user flow is: destination → ask pickup location → navigate Rapido →
+read Bike, Auto and Cab fares → ask for one spoken vehicle choice → tap the
+matching Book button once. It never handles Pay or OTP controls. A paid Sarvam
+key is not needed; the mic uses Android's on-device Hindi recognizer and TTS
+uses an installed offline voice.
 
 ## Verify changes
 
@@ -20,8 +21,9 @@ phone. See `docs/UPSTREAM_README.md` for the original ScreenSaathi project.
 
 ## Safety boundaries
 
-- Keep `rapido/RapidoPreview.kt` deterministic and fail closed on ambiguous
-  controls, destinations and fares.
+- Keep `rapido/RapidoPreview.kt` deterministic and fail closed on unverified
+  controls, pickup, destination and fares.
 - `ScreenReaderService.tapRapidoLabel` must reject booking and payment labels.
-- No final booking action exists in this milestone.
+- Only `bookRapidoRide` may tap Book, after an explicit spoken vehicle choice
+  and rechecking the selected vehicle, exact Book control and unchanged fare.
 - Do not add paid calls or cloud speech to the active mic path.

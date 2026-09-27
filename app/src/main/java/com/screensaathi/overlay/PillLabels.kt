@@ -15,7 +15,7 @@ import com.screensaathi.sarvam.Language
 object PillLabels {
 
     private val EN = mapOf(
-        PillState.IDLE to "ScreenSaathi",
+        PillState.IDLE to "Ride Helper",
         PillState.LISTENING to "Listening…",
         PillState.THINKING to "Thinking…",
         PillState.SPEAKING to "Speaking…",
@@ -24,7 +24,7 @@ object PillLabels {
     )
 
     private val HI = mapOf(
-        PillState.IDLE to "स्क्रीन साथी",
+        PillState.IDLE to "Ride Helper",
         PillState.LISTENING to "सुन रहा हूँ…",
         PillState.THINKING to "सोच रहा हूँ…",
         PillState.SPEAKING to "बोल रहा हूँ…",
@@ -33,7 +33,7 @@ object PillLabels {
     )
 
     private val TA = mapOf(
-        PillState.IDLE to "ஸ்கிரீன் சாத்தி",
+        PillState.IDLE to "Ride Helper",
         PillState.LISTENING to "கேட்கிறேன்…",
         PillState.THINKING to "யோசிக்கிறேன்…",
         PillState.SPEAKING to "பேசுகிறேன்…",

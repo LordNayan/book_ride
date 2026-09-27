@@ -79,6 +79,9 @@ class OverlayService : Service() {
     private var userY = 0
     private var dockAnimator: android.animation.ValueAnimator? = null
     private lateinit var minimizedDot: View
+    private var pendingOpenAnimation = false
+    private var pendingBubbleReveal = false
+    private var panelClosing = false
 
     private lateinit var controller: SessionController
 
@@ -119,10 +122,14 @@ class OverlayService : Service() {
         // Rehearsal entry point: run a task without speaking. Same engine,
         // overlay and cursor as a spoken request — only STT is skipped.
         when (intent?.action) {
+            ACTION_START_VOICE -> main.post {
+                openDestinationPanel()
+            }
             ACTION_PREVIEW_DEBUG -> {
                 if (BuildConfig.DEBUG) {
                     val destination = intent.getStringExtra(EXTRA_DESTINATION).orEmpty()
-                    main.post { controller.previewSpokenDestinationForDebug(destination) }
+                    val pickup = intent.getStringExtra(EXTRA_PICKUP)
+                    main.post { controller.previewSpokenDestinationForDebug(destination, pickup) }
                 }
             }
             ACTION_RUN_TASK -> {
@@ -180,7 +187,7 @@ class OverlayService : Service() {
         transportRow = pillRoot.findViewById(R.id.transport_row)
         waveform = pillRoot.findViewById(R.id.waveform)
         minimizedDot = pillRoot.findViewById(R.id.minimized_dot)
-        minimizedDot.setOnClickListener { setMinimized(false) }
+        minimizedDot.setOnClickListener { openDestinationPanel() }
         languageChip = pillRoot.findViewById(R.id.language_chip)
         debugPanel = pillRoot.findViewById(R.id.debug_panel)
         choiceRow = pillRoot.findViewById(R.id.choice_row)
@@ -215,7 +222,7 @@ class OverlayService : Service() {
         waveform.setOnClickListener { controller.onMicTapped() }
         pillRoot.findViewById<View>(R.id.next_button).setOnClickListener { controller.onNextTapped() }
         pillRoot.findViewById<View>(R.id.stop_button).setOnClickListener { controller.onStopTapped() }
-        pillRoot.findViewById<View>(R.id.close_button).setOnClickListener { stopSelf() }
+        pillRoot.findViewById<View>(R.id.close_button).setOnClickListener { closePanelToBubble() }
 
         val lp = WindowManager.LayoutParams(
             // FIXED width, not WRAP_CONTENT. With wrap, the WindowManager
@@ -243,6 +250,29 @@ class OverlayService : Service() {
         lp.gravity = Gravity.TOP or Gravity.START
         pillParams = lp
         wm.addView(pillRoot, lp)
+
+        // Text and choice rows can change the card height after a render. Keep
+        // its lower edge fixed once the new height has actually been measured.
+        pillRoot.addOnLayoutChangeListener { _, left, top, right, bottom,
+                                             oldLeft, oldTop, oldRight, oldBottom ->
+            if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) {
+                pillRoot.post {
+                    applyPosition(userX, userY, respectKeyboard = true)
+                    if (pendingOpenAnimation) {
+                        pendingOpenAnimation = false
+                        pillRoot.animate().alpha(1f).translationY(0f)
+                            .setDuration(PANEL_TRANSITION_MS)
+                            .setInterpolator(android.view.animation.DecelerateInterpolator())
+                            .start()
+                    }
+                    if (pendingBubbleReveal) {
+                        pendingBubbleReveal = false
+                        pillRoot.translationY = 0f
+                        pillRoot.alpha = 1f
+                    }
+                }
+            }
+        }
 
         // Position once the view has been measured — the safe area depends on
         // the window's real height, which is not known until layout.
@@ -284,6 +314,7 @@ class OverlayService : Service() {
     private fun imeTop(): Int = ScreenReaderService.instance?.imeTopPx() ?: 0
 
     private fun windowSize(): Pair<Int, Int> {
+        if (uiState == AssistantUiState.MINIMIZED) return dp(64) to dp(60)
         val w = if (pillRoot.width > 0) pillRoot.width else dp(PILL_WIDTH_DP)
         val h = if (pillRoot.height > 0) pillRoot.height else dp(96)
         return w to h
@@ -309,7 +340,14 @@ class OverlayService : Service() {
         val lp = pillParams ?: return
         val (w, h) = windowSize()
         val safe = safeArea()
-        var (cx, cy) = com.screensaathi.overlay.AssistantPlacement.clamp(x, y, w, h, safe)
+        // The full card is always bottom-centred, regardless of where its
+        // small bubble was last parked. The bubble keeps its own saved spot.
+        val proposedX = if (expanded && uiState != AssistantUiState.MINIMIZED &&
+            uiState != AssistantUiState.DRAGGING) safe.left + (safe.width() - w) / 2 else x
+        val proposedY = if (expanded && uiState != AssistantUiState.MINIMIZED &&
+            uiState != AssistantUiState.DRAGGING) safe.bottom - h - dp(12) else y
+        var (cx, cy) = com.screensaathi.overlay.AssistantPlacement
+            .clamp(proposedX, proposedY, w, h, safe)
         if (respectKeyboard) {
             com.screensaathi.overlay.AssistantPlacement
                 .avoidKeyboard(cy, h, imeTop(), dp(12))
@@ -362,6 +400,9 @@ class OverlayService : Service() {
 
             override fun onTouch(v: View, e: android.view.MotionEvent): Boolean {
                 val lp = pillParams ?: return false
+                // The expanded card belongs at the bottom. Only the small
+                // floating control can be repositioned by dragging.
+                if (expanded && uiState != AssistantUiState.DRAGGING) return false
                 when (e.actionMasked) {
                     android.view.MotionEvent.ACTION_DOWN -> {
                         downRawX = e.rawX; downRawY = e.rawY
@@ -398,6 +439,19 @@ class OverlayService : Service() {
                     android.view.MotionEvent.ACTION_UP,
                     android.view.MotionEvent.ACTION_CANCEL -> {
                         if (!moved) return false // let the click listener run
+                        if (stateBeforeDrag == AssistantUiState.MINIMIZED) {
+                            val (w, _) = windowSize()
+                            val safe = safeArea()
+                            userX = minimizedEdgeX(lp.x, w, safe)
+                            userY = lp.y
+                            getSharedPreferences("ride_helper_overlay", MODE_PRIVATE).edit()
+                                .putInt("minimized_x", userX)
+                                .putInt("minimized_y", userY)
+                                .apply()
+                            uiState = AssistantUiState.MINIMIZED
+                            animateToX(userX)
+                            return true
+                        }
                         val (w, _) = windowSize()
                         val safe = safeArea()
                         val snapped = com.screensaathi.overlay.AssistantPlacement
@@ -420,6 +474,7 @@ class OverlayService : Service() {
         pillRoot.setOnTouchListener(listener)
         pillRoot.findViewById<View>(R.id.pill_row).setOnTouchListener(listener)
         cardBody.setOnTouchListener(listener)
+        minimizedDot.setOnTouchListener(listener)
     }
 
     /** Slide to the docked x rather than teleporting there on release. */
@@ -437,13 +492,78 @@ class OverlayService : Service() {
     }
 
     /** Park the assistant as a dot so the app underneath is usable. */
+    private fun minimizedEdgeX(x: Int, width: Int, safe: Rect): Int =
+        if (x + width / 2 < safe.centerX()) safe.left + dp(12)
+        else safe.right - width - dp(12)
+
+    private fun openDestinationPanel() {
+        pillRoot.visibility = View.VISIBLE
+        if (expanded && uiState != AssistantUiState.MINIMIZED) {
+            controller.promptForDestination()
+            return
+        }
+        pillRoot.animate().cancel()
+        panelClosing = false
+        pendingBubbleReveal = false
+        pillRoot.alpha = 0f
+        pillRoot.translationY = dp(28).toFloat()
+        pendingOpenAnimation = true
+        setMinimized(false)
+        setExpanded(true)
+        controller.promptForDestination()
+    }
+
+    private fun closePanelToBubble() {
+        if (panelClosing) return
+        panelClosing = true
+        controller.onStopTapped()
+        pillRoot.animate().cancel()
+        pillRoot.animate().alpha(0f).translationY(dp(28).toFloat())
+            .setDuration(PANEL_TRANSITION_MS)
+            .setInterpolator(android.view.animation.AccelerateInterpolator())
+            .withEndAction {
+                pendingBubbleReveal = true
+                setMinimized(true)
+                panelClosing = false
+            }
+            .start()
+    }
+
     fun setMinimized(minimized: Boolean) {
         if (minimized && uiState == AssistantUiState.MINIMIZED) return
         uiState = if (minimized) AssistantUiState.MINIMIZED else AssistantUiState.COLLAPSED
+        expanded = false
         cardBody.visibility = View.GONE
+        pillRoot.setBackgroundResource(if (minimized) android.R.color.transparent else R.drawable.pill_bg)
         pillRoot.findViewById<View>(R.id.pill_row).visibility =
             if (minimized) View.GONE else View.VISIBLE
         minimizedDot.visibility = if (minimized) View.VISIBLE else View.GONE
+        pillParams?.let { lp ->
+            lp.width = dp(if (minimized) 64 else PILL_WIDTH_DP)
+            lp.height = if (minimized) dp(60) else WindowManager.LayoutParams.WRAP_CONTENT
+            if (minimized) {
+                val saved = getSharedPreferences("ride_helper_overlay", MODE_PRIVATE)
+                val savedX = saved.getInt("minimized_x", Int.MIN_VALUE)
+                val savedY = saved.getInt("minimized_y", Int.MIN_VALUE)
+                if (savedX != Int.MIN_VALUE && savedY != Int.MIN_VALUE) {
+                    userX = minimizedEdgeX(savedX, lp.width, safeArea())
+                    userY = savedY
+                } else {
+                    val safe = safeArea()
+                    userX = safe.right - lp.width - dp(12)
+                    userY = safe.bottom - dp(64) - dp(28)
+                }
+                // Apply size and coordinates in the same WindowManager update.
+                // Otherwise the dot is briefly drawn where the card was before
+                // the posted placement callback moves it to its saved edge.
+                val (x, y) = com.screensaathi.overlay.AssistantPlacement.clamp(
+                    userX, userY, lp.width, lp.height, safeArea(),
+                )
+                lp.x = x
+                lp.y = y
+            }
+            runCatching { wm.updateViewLayout(pillRoot, lp) }
+        }
         pillRoot.post { applyPosition(userX, userY, respectKeyboard = true) }
     }
 
@@ -624,7 +744,9 @@ class OverlayService : Service() {
         cmd.instruction?.let { instructionText.text = it }
         renderChoices(cmd.choices)
 
-        if (cmd.expanded != expanded) setExpanded(cmd.expanded)
+        if (!panelClosing && uiState != AssistantUiState.MINIMIZED && cmd.expanded != expanded) {
+            setExpanded(cmd.expanded)
+        }
 
         // Keep the cursor's launch point under the pill, so it always flies out
         // of the assistant rather than appearing from nowhere.
@@ -673,6 +795,7 @@ class OverlayService : Service() {
     private fun setExpanded(value: Boolean) {
         expanded = value
         cardBody.visibility = if (value) View.VISIBLE else View.GONE
+        pillRoot.setBackgroundResource(if (value) R.drawable.expanded_card_bg else R.drawable.pill_bg)
         // Exactly one state indicator on screen at a time: the 52dp mic orb
         // when expanded, the 18dp collapsed dot otherwise — never both.
         stateDot.visibility = if (value) View.GONE else View.VISIBLE
@@ -686,13 +809,13 @@ class OverlayService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             nm.createNotificationChannel(
                 NotificationChannel(
-                    channelId, "ScreenSaathi", NotificationManager.IMPORTANCE_LOW
+                    channelId, "Ride Helper", NotificationManager.IMPORTANCE_LOW
                 )
             )
         }
         val notif: Notification =
             androidx.core.app.NotificationCompat.Builder(this, channelId)
-                .setContentTitle("ScreenSaathi is ready")
+                .setContentTitle("Ride Helper is ready")
                 .setContentText("Tap the floating pill to start.")
                 .setSmallIcon(android.R.drawable.ic_btn_speak_now)
                 .setOngoing(true)
@@ -733,10 +856,22 @@ class OverlayService : Service() {
     companion object {
         private const val NOTIF_ID = 42
 
+        /** Called on the main thread while an accessibility gesture is injected. */
+        fun hidePillForRapidoGesture(): () -> Unit {
+            val service = live ?: return {}
+            val previous = service.pillRoot.visibility
+            service.pillRoot.visibility = View.INVISIBLE
+            return {
+                if (live === service) service.pillRoot.visibility = previous
+            }
+        }
+
         /** Shared across any Service instance in this process — see onCreate(). */
         @Volatile private var windowsAdded = false
 
         @Volatile private var live: OverlayService? = null
+
+        fun isRunning(): Boolean = live != null && windowsAdded
 
         /**
          * The system's window set changed — most importantly the keyboard
@@ -752,12 +887,14 @@ class OverlayService : Service() {
         private const val PILL_WIDTH_DP = 320
         private const val TRANSITION_MS = 220L
         private const val DOCK_MS = 180L
+        private const val PANEL_TRANSITION_MS = 220L
         private const val TAG_UI = "AssistantUI"
         /** ~30fps is plenty: the view smooths between samples itself. */
         private const val LEVEL_POLL_MS = 33L
 
         const val ACTION_RUN_TASK = "com.screensaathi.RUN_TASK"
         const val ACTION_PREVIEW_DEBUG = "com.screensaathi.PREVIEW_DEBUG"
+        const val ACTION_START_VOICE = "com.screensaathi.START_VOICE"
         const val ACTION_CHOOSE = "com.screensaathi.CHOOSE"
         const val ACTION_HIGHLIGHT = "com.screensaathi.HIGHLIGHT"
         const val ACTION_CLEAR_HIGHLIGHT = "com.screensaathi.CLEAR_HIGHLIGHT"
@@ -766,11 +903,12 @@ class OverlayService : Service() {
         const val EXTRA_QUERY = "query"
         const val EXTRA_TASK_ID = "task_id"
         const val EXTRA_DESTINATION = "destination"
+        const val EXTRA_PICKUP = "pickup"
         const val EXTRA_LANGUAGE = "language"
         const val EXTRA_CHOICE = "choice"
 
         fun start(context: Context) {
-            val i = Intent(context, OverlayService::class.java)
+            val i = Intent(context, OverlayService::class.java).setAction(ACTION_START_VOICE)
             ContextCompat.startForegroundService(context, i)
         }
 
@@ -848,11 +986,12 @@ class OverlayService : Service() {
             ContextCompat.startForegroundService(context, i)
         }
 
-        fun previewDebug(context: Context, destination: String) {
+        fun previewDebug(context: Context, destination: String, pickup: String? = null) {
             if (!BuildConfig.DEBUG) return
             val i = Intent(context, OverlayService::class.java)
                 .setAction(ACTION_PREVIEW_DEBUG)
                 .putExtra(EXTRA_DESTINATION, destination)
+                .putExtra(EXTRA_PICKUP, pickup)
             ContextCompat.startForegroundService(context, i)
         }
     }

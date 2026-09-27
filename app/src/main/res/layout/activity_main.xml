@@ -15,7 +15,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="रैपिडो यात्रा सहायक"
+            android:text="Ride Helper"
             android:textColor="@color/saathi_text"
             android:textSize="30sp"
             android:textStyle="bold" />
@@ -23,7 +23,7 @@
         <TextView
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="एक बार अनुमति दें। फिर तैरते माइक्रोफ़ोन को दबाकर जगह बोलें। किराया सुनने के बाद ऐप रुक जाएगा; बुकिंग नहीं करेगा।"
+            android:text="एक बार अनुमति दें। सहायक शुरू होते ही जगह पूछेगा। सवाल पूरा सुनकर जवाब बोलें; माइक अपने आप चालू होगा। पिकअप चुनें, किराये सुनें, फिर जिस गाड़ी को बुक करना हो उसका नाम बोलें।"
             android:textColor="@color/saathi_text_dim"
             android:textSize="15sp"
             android:paddingTop="6dp"
