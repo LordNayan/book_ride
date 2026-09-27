@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <!-- The whole product is a floating overlay; without this there is no UI. -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+
+    <queries>
+        <package android:name="com.rapido.passenger" />
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
+    <application
+        android:name=".SaathiApp"
+        android:allowBackup="false"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.ScreenSaathi">
+
+        <!-- Setup gateway only: grants permissions, starts the overlay, then
+             gets out of the way. Not part of the demo flow. -->
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          ScreenSaathi as the home screen.
+
+          Opt-in by construction: declaring CATEGORY_HOME only makes the app
+          *eligible*; Android routes HOME here solely if the user selects
+          ScreenSaathi as their default launcher. A user who never does is
+          unaffected, and MainActivity remains the normal entry point.
+
+          stateUnchanged/adjustPan and the excludeFromRecents/singleTask combo
+          are the standard launcher posture — a home screen should not stack
+          instances or appear in Recents as if it were an ordinary app.
+        -->
+        <activity
+            android:name=".launcher.LauncherActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:excludeFromRecents="true"
+            android:stateNotNeeded="true"
+            android:windowSoftInputMode="stateUnchanged|adjustPan"
+            android:theme="@style/Theme.ScreenSaathi">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.HOME" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
+        <!-- The controlled screen the assistant guides the user through. Real
+             Android views with real resource ids, read live over accessibility. -->
+        <activity
+            android:name=".DemoTaskActivity"
+            android:exported="false"
+            android:label="@string/demo_title"
+            android:windowSoftInputMode="adjustResize" />
+
+        <!--
+          Trigger a highlight without changing the foreground app. Exported so
+          it can be driven from adb during development and demos; it carries no
+          data and only starts our own already-running service.
+        -->
+        <receiver
+            android:name=".HighlightReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="com.screensaathi.HIGHLIGHT" />
+                <action android:name="com.screensaathi.CLEAR_HIGHLIGHT" />
+                <action android:name="com.screensaathi.DUMP_SCREEN" />
+                <action android:name="com.screensaathi.SELECT" />
+                <action android:name="com.screensaathi.SELECT_ASK" />
+                <action android:name="com.screensaathi.START_SELECTION" />
+            </intent-filter>
+        </receiver>
+
+        <service
+            android:name=".OverlayService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <service
+            android:name=".ScreenReaderService"
+            android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/accessibility_service_config" />
+        </service>
+
+    </application>
+</manifest>

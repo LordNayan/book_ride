@@ -1,0 +1,4 @@
+# Copy this file to local.properties and set the path to your Android SDK.
+sdk.dir=C\:/path/to/Android/Sdk
+
+# The Rapido preview uses Android on-device speech. No API key is needed.
