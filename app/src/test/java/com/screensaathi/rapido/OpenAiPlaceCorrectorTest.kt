@@ -59,6 +59,8 @@ class OpenAiPlaceCorrectorTest {
         assertFalse(sent!!.getBoolean("store"))
         assertTrue(corrector.shouldCheck("Bicholi Mardna Ext"))
         assertFalse(corrector.shouldCheck("Vijay Nagar"))
+        assertFalse(corrector.shouldCheck("MG Road"))
+        assertFalse(corrector.shouldCheck("Bada Ganpati"))
         assertFalse(OpenAiPlaceCorrector(apiKey = "").shouldCheck("Bicholi Mardna Ext"))
     }
 

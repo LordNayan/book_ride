@@ -1,0 +1,163 @@
+[
+  {
+    "query": "Vijay Nagar",
+    "field": "Drop Location is Vijay Nagar. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "Vijay Nagar",
+        "address": "Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "Vijay Nagar, Scheme No 54",
+        "address": "Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      1
+    ],
+    "reviewer_note": "Exact Indore neighborhood result."
+  },
+  {
+    "query": "Rajwada",
+    "field": "Drop Location is Rajwada. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "Rajwada",
+        "address": "Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "Rajwada Palace",
+        "address": "Rajwada, Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      1
+    ],
+    "reviewer_note": "Exact Indore place result."
+  },
+  {
+    "query": "Palasia",
+    "field": "Drop Location is Palasia. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "Palasia",
+        "address": "Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "Palasia Square",
+        "address": "Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      1
+    ],
+    "reviewer_note": "Exact Indore neighborhood result."
+  },
+  {
+    "query": "MG Road",
+    "field": "Drop Location is MG Road. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "MG Road",
+        "address": "Rajwada, Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "M.G.Road",
+        "address": "Jail Road, Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      0
+    ],
+    "reviewer_note": "Two similarly named roads with different address context; spoken request is underspecified."
+  },
+  {
+    "query": "Bada Ganpati",
+    "field": "Drop Location is Bada Ganpati. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "Bada Ganpati, Malharganj",
+        "address": "Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "Bada Ganpati Mandir",
+        "address": "Bada Ganpati, Malharganj, Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      0
+    ],
+    "reviewer_note": "Area and temple are both plausible; spoken request is underspecified."
+  },
+  {
+    "query": "Vijay Nagar Police Station",
+    "field": "Drop Location is Vijay Nagar Police Station. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "Vijay Nagar Police Station",
+        "address": "Vijay Nagar Square, Vijay Nagar, Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "Police Station Lasudiya",
+        "address": "Sector C, Vijay Nagar, Aranya Nagar, Scheme 78, Vijay Nagar, Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      1
+    ],
+    "reviewer_note": "Exact police station name."
+  },
+  {
+    "query": "Vijay Nagar Square",
+    "field": "Drop Location is Vijay Nagar Square. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "Sayaji Square",
+        "address": "Vijay Nagar, Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "Commerce Square",
+        "address": "Vijay Nagar, Scheme No 54, Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      0
+    ],
+    "reviewer_note": "Neither visible title is Vijay Nagar Square."
+  },
+  {
+    "query": "Indore Airport",
+    "field": "Drop Location is Indore Airport. Double tap to change",
+    "rows": [
+      {
+        "rank": 1,
+        "title": "Indore Airport",
+        "address": "Depalpur Road, Devi Ahillyabai Holkar Airport Area, Indore, Madhya Pradesh, India"
+      },
+      {
+        "rank": 2,
+        "title": "Devi Ahilyabai Holkar International Airport, Indore",
+        "address": "Indore, Madhya Pradesh, India"
+      }
+    ],
+    "acceptable_ranks": [
+      1,
+      2
+    ],
+    "reviewer_note": "Both visible names refer to the airport; either resolves the same request."
+  }
+]

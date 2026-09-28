@@ -154,6 +154,12 @@ class RapidoPreview(val request: RapidoIntent) {
     }
 
     private fun inspectPickupResults(screen: ScreenSnapshot): Decision {
+        // A person may tap a result while we are still reading the list.
+        if (screen.elements.any { it.resourceId == "bfse_title" &&
+                it.text == "Booking for someone else?" }) {
+            stage = Stage.BOOKING_FOR
+            return inspectBookingFor(screen)
+        }
         val place = request.pickupLocation ?: return Decision.Stop("Alternate pickup is missing")
         return inspectExactLocationResult(screen, "pickup_text", "Pickup Location is ", place,
             Stage.BOOKING_FOR)
@@ -205,6 +211,12 @@ class RapidoPreview(val request: RapidoIntent) {
     }
 
     private fun inspectResults(screen: ScreenSnapshot): Decision {
+        // Accept a manual row tap even before we have asked for help.
+        if (screen.elements.any { it.text == "Choose your ride Screen" }) {
+            destinationSelected = true
+            stage = Stage.FARE
+            return inspectFare(screen)
+        }
         val wanted = normalize(request.destination)
         val queryShown = screen.elements.any {
             it.resourceId == "drop_text" && normalize(it.text).contains("drop location is $wanted")
@@ -226,7 +238,7 @@ class RapidoPreview(val request: RapidoIntent) {
         if (!queryShown) return Decision.Wait
         val rows = screen.elements.filter { it.text.matches(RESULT_ROW_LABEL) }
             .sortedBy { it.text.substringAfter("Item ").substringBefore(" of").toIntOrNull() ?: Int.MAX_VALUE }
-        val wanted = normalize(place)
+        val wanted = normalizeTitle(place)
         val candidates = rows.map { row ->
             val lines = screen.elements.filter {
                 it.className == "TextView" && it.text.isNotBlank() &&
@@ -239,44 +251,34 @@ class RapidoPreview(val request: RapidoIntent) {
             } }
             Triple(row, title, address)
         }
-        val ranked = candidates.mapNotNull { (row, title, address) ->
+        val exact = candidates.mapNotNull { (row, title, address) ->
             if (title == null || address == null || !INDORE_ADDRESS.containsMatchIn(address.text)) {
                 return@mapNotNull null
             }
-            val actual = normalize(title.text)
-            val score = when {
-                actual == wanted -> 3
-                actual.startsWith("$wanted,") -> 2
-                actual.startsWith("$wanted ") -> 1
-                else -> 0
-            }
-            if (score < 2) null else LocationResult(row, title, address, score)
+            if (normalizeTitle(title.text) == wanted) LocationResult(row, title, address) else null
         }
-        val best = ranked.maxOfOrNull { it.score } ?: return if (rows.isEmpty())
-            Decision.Wait else unmatchedResult(next)
-        val equallyRanked = ranked.filter { it.score == best }
-        // If two places have the same title but different addresses, the
-        // spoken query gives us no basis for choosing between them.
-        if (equallyRanked.map { normalize(it.address.text) }.distinct().size > 1) {
-            return unmatchedResult(next, ambiguous = true)
+        if (exact.isEmpty()) return if (rows.isEmpty()) Decision.Wait else unmatchedResult(next)
+        // Include every visible row in the stability check so a second exact
+        // title loading into a placeholder cannot be overlooked.
+        val signature = rows.joinToString("|") { row ->
+            val candidate = candidates[rows.indexOf(row)]
+            "${row.text}:${candidate.second?.text}:${candidate.third?.text}:" +
+                "${candidate.second?.bounds?.toShortString()}"
         }
-        val chosen = equallyRanked.first()
-        // Rapido briefly inserts unnamed placeholder rows while its search
-        // results load. A match below one can shift upward before a gesture
-        // arrives, causing the tap to hit a different row.
-        val chosenIndex = rows.indexOf(chosen.row)
-        if (candidates.take(chosenIndex).any { it.second == null || it.third == null }) return Decision.Wait
-        val signature = "${rows.size}:${chosenIndex}:${chosen.title.text}:${chosen.address.text}:" +
-            chosen.title.bounds.toShortString()
         if (resultSignature != signature) {
             resultSignature = signature
             stableResultReads = 1
             return Decision.Wait
         }
         if (++stableResultReads < 2) return Decision.Wait
+        if (exact.size > 1) return Decision.ManualSelection(next, ambiguous = true)
+        val chosen = exact.single()
+        // Rapido briefly inserts unnamed placeholder rows while its search
+        // results load. A match below one can shift upward before a gesture
+        // arrives, causing the tap to hit a different row.
+        val chosenIndex = rows.indexOf(chosen.row)
+        if (candidates.take(chosenIndex).any { it.second == null || it.third == null }) return Decision.Wait
         unmatchedResultReads = 0
-        // Rapido orders its search results by relevance. For equal scores,
-        // use the first visible row, as requested by the user.
         // Tap the title itself: a row-centre gesture can land in blank space
         // on Rapido's search-result card without opening that location.
         return Decision.Tap(chosen.title.text, chosen.title.bounds, next)
@@ -286,7 +288,6 @@ class RapidoPreview(val request: RapidoIntent) {
         val row: ScreenElement,
         val title: ScreenElement,
         val address: ScreenElement,
-        val score: Int,
     )
 
     private fun unmatchedResult(next: Stage, ambiguous: Boolean = false): Decision {
@@ -409,6 +410,8 @@ class RapidoPreview(val request: RapidoIntent) {
 
     private fun normalize(text: String): String = text.trim().lowercase()
         .replace(Regex("[?।]"), "").replace(Regex("\\s+"), " ")
+    private fun normalizeTitle(text: String): String = text.trim().lowercase()
+        .replace(Regex("\\s+"), " ")
 
     private fun containsCenter(outer: Rect, inner: Rect): Boolean {
         val x = inner.left + (inner.right - inner.left) / 2

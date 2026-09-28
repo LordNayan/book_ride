@@ -190,7 +190,7 @@ class RapidoPreviewTest {
         assertEquals("Cab Economy", (book as RapidoPreview.Decision.Book).actualLabel)
     }
 
-    @Test fun `first equally matched Rapido row wins`() {
+    @Test fun `multiple exact Rapido rows require manual selection even with the same address`() {
         val flow = RapidoPreview(RapidoIntent("Rajwada", RapidoIntent.Vehicle.AUTO))
         flow.advanced(RapidoPreview.Stage.RESULTS)
         val resultScreen = screen(
@@ -205,11 +205,10 @@ class RapidoPreviewTest {
             ScreenElement(6, "", "Indore, Madhya Pradesh, India", "TextView",
                 rect(120, 983, 720, 1030), false, false))
         assertEquals(RapidoPreview.Decision.Wait, flow.inspect(resultScreen))
-        val result = flow.inspect(resultScreen)
-        val tap = result as RapidoPreview.Decision.Tap
-        assertEquals("Rajwada", tap.label)
-        assertEquals(120, tap.bounds.left)
-        assertEquals(729, tap.bounds.top)
+        val result = flow.inspect(resultScreen) as RapidoPreview.Decision.ManualSelection
+        assertTrue(result.ambiguous)
+        flow.awaitManualSelection(result.next)
+        assertTrue(flow.inspect(fareScreen()) is RapidoPreview.Decision.Preview)
     }
 
     @Test fun `outside Indore first result is skipped for an Indore result`() {
@@ -230,9 +229,49 @@ class RapidoPreviewTest {
         val choices = screen(resultField("Vijay Nagar"),
             *resultRow(1, 2, "Vijay Nagar", "Scheme 54, Indore, Madhya Pradesh, India", 694),
             *resultRow(2, 2, "Vijay Nagar", "Vijay Nagar Square, Indore, Madhya Pradesh, India", 878))
-        repeat(4) { assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices)) }
+        assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices))
         val decision = flow.inspect(choices) as RapidoPreview.Decision.ManualSelection
         assertTrue(decision.ambiguous)
+    }
+
+    @Test fun `unique exact title wins over longer similar names`() {
+        val flow = RapidoPreview(RapidoIntent("Bada Ganpati", RapidoIntent.Vehicle.AUTO))
+        flow.advanced(RapidoPreview.Stage.RESULTS)
+        val choices = screen(resultField("Bada Ganpati"),
+            *resultRow(1, 3, "Bada ganpati", "Malharganj, Indore, Madhya Pradesh, India", 694),
+            *resultRow(2, 3, "Bada Ganpati, Malharganj", "Indore, Madhya Pradesh, India", 878),
+            *resultRow(3, 3, "Bada Ganpati Mandir", "Indore, Madhya Pradesh, India", 1062))
+        assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices))
+        val tap = flow.inspect(choices) as RapidoPreview.Decision.Tap
+        assertEquals("Bada ganpati", tap.label)
+    }
+
+    @Test fun `punctuation variant does not count as an exact title`() {
+        val flow = RapidoPreview(RapidoIntent("MG Road", RapidoIntent.Vehicle.AUTO))
+        flow.advanced(RapidoPreview.Stage.RESULTS)
+        val choices = screen(resultField("MG Road"),
+            *resultRow(1, 2, "MG Road", "Rajwada, Indore, Madhya Pradesh, India", 694),
+            *resultRow(2, 2, "M.G.Road", "Jail Road, Indore, Madhya Pradesh, India", 878))
+        assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices))
+        assertEquals("MG Road", (flow.inspect(choices) as RapidoPreview.Decision.Tap).label)
+    }
+
+    @Test fun `manual destination tap during result scan resumes at fares`() {
+        val flow = RapidoPreview(RapidoIntent("Vijay Nagar", RapidoIntent.Vehicle.AUTO))
+        flow.advanced(RapidoPreview.Stage.RESULTS)
+        assertTrue(flow.inspect(fareScreen()) is RapidoPreview.Decision.Preview)
+    }
+
+    @Test fun `manual pickup tap during result scan resumes at booking for self`() {
+        val flow = RapidoPreview(RapidoIntent("Rajwada", RapidoIntent.Vehicle.AUTO, "Palasia"))
+        flow.advanced(RapidoPreview.Stage.PICKUP_RESULTS)
+        val booking = screen(
+            ScreenElement(1, "bfse_title", "Booking for someone else?", "TextView",
+                rect(40, 1751, 731, 1816), false, false),
+            ScreenElement(2, "", "No, booking for me", "TextView",
+                rect(40, 1820, 731, 1880), false, false))
+        assertEquals("No, booking for me",
+            (flow.inspect(booking) as RapidoPreview.Decision.Tap).label)
     }
 
     @Test fun `result without an Indore address is never tapped`() {

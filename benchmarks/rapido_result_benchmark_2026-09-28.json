@@ -1,0 +1,563 @@
+{
+  "dataset": "benchmarks/rapido_s23_2026-09-28.json",
+  "repeats": 2,
+  "models": [
+    "gpt-4.1-nano",
+    "gpt-4.1-mini",
+    "gpt-6-luna"
+  ],
+  "tools": [],
+  "summaries": {
+    "gpt-4.1-nano": {
+      "correct": 10,
+      "total": 16,
+      "median_seconds": 2.587,
+      "unsafe_selections": 4,
+      "failures": 0
+    },
+    "gpt-4.1-mini": {
+      "correct": 12,
+      "total": 16,
+      "median_seconds": 1.143,
+      "unsafe_selections": 4,
+      "failures": 0
+    },
+    "gpt-6-luna": {
+      "correct": 14,
+      "total": 16,
+      "median_seconds": 1.456,
+      "unsafe_selections": 2,
+      "failures": 0
+    }
+  },
+  "records": [
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Palasia",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.672,
+      "input_tokens": 231,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Rajwada",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.545,
+      "input_tokens": 238,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Rajwada",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.441,
+      "input_tokens": 238,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Vijay Nagar Police Station",
+      "repeat": 1,
+      "rank": 0,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 1.639,
+      "input_tokens": 267,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Bada Ganpati",
+      "repeat": 2,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 1.207,
+      "input_tokens": 257,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "MG Road",
+      "repeat": 1,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 1.17,
+      "input_tokens": 240,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Palasia",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.597,
+      "input_tokens": 229,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Indore Airport",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.295,
+      "input_tokens": 256,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Vijay Nagar",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 0.942,
+      "input_tokens": 241,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Vijay Nagar",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.38,
+      "input_tokens": 239,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Rajwada",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.628,
+      "input_tokens": 238,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Bada Ganpati",
+      "repeat": 2,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 1.697,
+      "input_tokens": 255,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Bada Ganpati",
+      "repeat": 1,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 1.061,
+      "input_tokens": 257,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Vijay Nagar Square",
+      "repeat": 1,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.365,
+      "input_tokens": 247,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Vijay Nagar Police Station",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.309,
+      "input_tokens": 265,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Indore Airport",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.923,
+      "input_tokens": 254,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Vijay Nagar Square",
+      "repeat": 2,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 0.796,
+      "input_tokens": 249,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "MG Road",
+      "repeat": 2,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.321,
+      "input_tokens": 238,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Vijay Nagar Police Station",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 0.915,
+      "input_tokens": 267,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Vijay Nagar",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 3.254,
+      "input_tokens": 241,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Rajwada",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.157,
+      "input_tokens": 236,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Vijay Nagar Police Station",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 4.781,
+      "input_tokens": 267,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Vijay Nagar Square",
+      "repeat": 2,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 3.484,
+      "input_tokens": 249,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Rajwada",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.244,
+      "input_tokens": 236,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Palasia",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 3.075,
+      "input_tokens": 231,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Vijay Nagar Square",
+      "repeat": 2,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.193,
+      "input_tokens": 247,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Vijay Nagar",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.023,
+      "input_tokens": 241,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Vijay Nagar",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.719,
+      "input_tokens": 241,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Indore Airport",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 3.09,
+      "input_tokens": 254,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Bada Ganpati",
+      "repeat": 2,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 1.06,
+      "input_tokens": 257,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Rajwada",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 0.911,
+      "input_tokens": 238,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Indore Airport",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.196,
+      "input_tokens": 256,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "MG Road",
+      "repeat": 2,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 2.904,
+      "input_tokens": 240,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "MG Road",
+      "repeat": 1,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.229,
+      "input_tokens": 238,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Indore Airport",
+      "repeat": 1,
+      "rank": 0,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 2.748,
+      "input_tokens": 256,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Vijay Nagar Police Station",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.273,
+      "input_tokens": 265,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Palasia",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 0.731,
+      "input_tokens": 231,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Bada Ganpati",
+      "repeat": 1,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 1.117,
+      "input_tokens": 257,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Indore Airport",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.406,
+      "input_tokens": 256,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Vijay Nagar Police Station",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 7.249,
+      "input_tokens": 267,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "Vijay Nagar Square",
+      "repeat": 1,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.132,
+      "input_tokens": 249,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Bada Ganpati",
+      "repeat": 1,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 0.996,
+      "input_tokens": 255,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Palasia",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 0.856,
+      "input_tokens": 231,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Palasia",
+      "repeat": 1,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.72,
+      "input_tokens": 229,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-nano",
+      "case": "MG Road",
+      "repeat": 1,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 6.398,
+      "input_tokens": 240,
+      "output_tokens": 7
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "MG Road",
+      "repeat": 2,
+      "rank": 1,
+      "correct": false,
+      "status": "ok",
+      "elapsed_seconds": 0.839,
+      "input_tokens": 240,
+      "output_tokens": 6
+    },
+    {
+      "model": "gpt-6-luna",
+      "case": "Vijay Nagar",
+      "repeat": 2,
+      "rank": 1,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.533,
+      "input_tokens": 239,
+      "output_tokens": 15
+    },
+    {
+      "model": "gpt-4.1-mini",
+      "case": "Vijay Nagar Square",
+      "repeat": 1,
+      "rank": 0,
+      "correct": true,
+      "status": "ok",
+      "elapsed_seconds": 1.638,
+      "input_tokens": 249,
+      "output_tokens": 6
+    }
+  ]
+}
