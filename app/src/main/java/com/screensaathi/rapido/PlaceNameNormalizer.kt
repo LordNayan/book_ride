@@ -104,6 +104,9 @@ object PlaceNameNormalizer {
         "avnue" to "Avenue",
     )
 
+    /** Exact local fast path; the web-backed corrector can return other names. */
+    fun canonicalIndorePlaces(): List<String> = knownPlaces.values.distinct().sorted()
+
     fun englishPlace(raw: String): String? {
         val place = raw.trim().replace(Regex("\\s+"), " ")
             .trim(' ', '.', '?', '।', ',', '!')

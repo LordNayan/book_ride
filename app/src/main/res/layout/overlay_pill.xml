@@ -51,6 +51,19 @@
                 android:focusable="true" />
         </FrameLayout>
 
+        <TextView
+            android:id="@+id/place_source"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:paddingBottom="8dp"
+            android:text="जगह का स्रोत देखें ↗"
+            android:textColor="@color/saathi_text"
+            android:textSize="13sp"
+            android:contentDescription="जगह का स्रोत खोलें"
+            android:clickable="true"
+            android:focusable="true"
+            android:visibility="gone" />
+
         <!-- Choice row: one button per option (e.g. the ride apps on this
              phone). Hidden unless the current step actually asks something. -->
         <LinearLayout

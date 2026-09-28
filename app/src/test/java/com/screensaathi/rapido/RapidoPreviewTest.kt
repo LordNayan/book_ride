@@ -9,6 +9,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RapidoPreviewTest {
+    @Test fun `asks for one manual Home tap then resumes before destination entry`() {
+        val flow = RapidoPreview(RapidoIntent("Rajwada", RapidoIntent.Vehicle.AUTO))
+        val address = "51, Manik Bagh Rd, Indore, Madhya Pradesh, India"
+        val home = screen(
+            element("Home Screen"),
+            ScreenElement(1, "", address, "TextView", rect(140, 220, 1010, 280), false, false),
+            ScreenElement(2, "", "Where do you want to go?", "Button",
+                rect(55, 473, 1025, 570), false, false))
+        val initial = flow.inspect(home) as RapidoPreview.Decision.Tap
+        flow.advanced(initial.next)
+        repeat(9) { assertEquals(RapidoPreview.Decision.Wait, flow.inspect(home)) }
+        val manual = flow.inspect(home) as RapidoPreview.Decision.ManualSelection
+        assertEquals(RapidoPreview.Stage.PICKUP, manual.next)
+        flow.awaitManualSelection(manual.next)
+        assertEquals(RapidoPreview.Decision.Wait, flow.inspect(home))
+        val pickup = ScreenElement(1, "pickup_text", "Pickup Location is $address. Double tap to change",
+            "View", rect(178, 294, 1000, 386), false, false)
+        val drop = ScreenElement(2, "drop_text", "Enter Drop location Input Field. Enter at least 4 characters to start searching.",
+            "View", rect(178, 429, 1000, 521), false, false)
+        val resumed = flow.inspect(screen(element("Pickup and Drop Screen"), pickup, drop))
+        assertTrue(resumed is RapidoPreview.Decision.Type)
+        assertEquals("Rajwada", (resumed as RapidoPreview.Decision.Type).value)
+    }
+
     @Test fun `extracts a Hindi destination and defaults to auto`() {
         assertEquals(RapidoIntent("Rajwada", RapidoIntent.Vehicle.AUTO),
             RapidoIntent.parse("राजवाड़ा जाना है"))
@@ -49,7 +73,9 @@ class RapidoPreviewTest {
     @Test fun `unmatched place results request manual selection and resume at fares`() {
         val flow = RapidoPreview(RapidoIntent("Rajwada", RapidoIntent.Vehicle.AUTO))
         flow.advanced(RapidoPreview.Stage.RESULTS)
-        val choices = screen(element("Rajwada, Indore"), element("Rajwada, Ujjain"))
+        val choices = screen(resultField("Rajwada"),
+            *resultRow(1, 2, "Rajwada", "Ujjain, Madhya Pradesh, India", 694),
+            *resultRow(2, 2, "Rajwada", "Dewas, Madhya Pradesh, India", 878))
         repeat(4) { assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices)) }
         val decision = flow.inspect(choices)
         assertTrue(decision is RapidoPreview.Decision.ManualSelection)
@@ -113,6 +139,8 @@ class RapidoPreviewTest {
             drop.copy(text = "Drop Location is Rajwada. Double tap to change"),
             ScreenElement(3, "", "Item 1 of 5", "View", rect(0, 694, 1080, 878), false, false),
             ScreenElement(4, "", "Rajwada", "TextView", rect(120, 729, 312, 786), false, false),
+            ScreenElement(6, "", "Indore, Madhya Pradesh, India", "TextView",
+                rect(120, 796, 720, 843), false, false),
             ScreenElement(5, "", "Rajwada Palace", "TextView", rect(184, 916, 537, 973), false, false))
         assertEquals(RapidoPreview.Decision.Wait, flow.inspect(resultScreen))
         val result = flow.inspect(resultScreen)
@@ -170,14 +198,51 @@ class RapidoPreviewTest {
                 "View", rect(178, 429, 1000, 521), false, false),
             ScreenElement(1, "", "Item 1 of 2", "View", rect(0, 694, 1080, 878), false, false),
             ScreenElement(2, "", "Rajwada", "TextView", rect(120, 729, 312, 786), false, false),
+            ScreenElement(5, "", "Indore, Madhya Pradesh, India", "TextView",
+                rect(120, 796, 720, 843), false, false),
             ScreenElement(3, "", "Item 2 of 2", "View", rect(0, 881, 1080, 1065), false, false),
-            ScreenElement(4, "", "Rajwada", "TextView", rect(120, 916, 312, 973), false, false))
+            ScreenElement(4, "", "Rajwada", "TextView", rect(120, 916, 312, 973), false, false),
+            ScreenElement(6, "", "Indore, Madhya Pradesh, India", "TextView",
+                rect(120, 983, 720, 1030), false, false))
         assertEquals(RapidoPreview.Decision.Wait, flow.inspect(resultScreen))
         val result = flow.inspect(resultScreen)
         val tap = result as RapidoPreview.Decision.Tap
         assertEquals("Rajwada", tap.label)
         assertEquals(120, tap.bounds.left)
         assertEquals(729, tap.bounds.top)
+    }
+
+    @Test fun `outside Indore first result is skipped for an Indore result`() {
+        val flow = RapidoPreview(RapidoIntent("Vijay Nagar", RapidoIntent.Vehicle.AUTO))
+        flow.advanced(RapidoPreview.Stage.RESULTS)
+        val choices = screen(resultField("Vijay Nagar"),
+            *resultRow(1, 2, "Vijay Nagar", "Ujjain, Madhya Pradesh, India", 694),
+            *resultRow(2, 2, "Vijay Nagar", "Indore, Madhya Pradesh, India", 878))
+        assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices))
+        val tap = flow.inspect(choices) as RapidoPreview.Decision.Tap
+        assertEquals("Vijay Nagar", tap.label)
+        assertEquals(913, tap.bounds.top)
+    }
+
+    @Test fun `same title at different Indore addresses needs human selection`() {
+        val flow = RapidoPreview(RapidoIntent("Vijay Nagar", RapidoIntent.Vehicle.AUTO))
+        flow.advanced(RapidoPreview.Stage.RESULTS)
+        val choices = screen(resultField("Vijay Nagar"),
+            *resultRow(1, 2, "Vijay Nagar", "Scheme 54, Indore, Madhya Pradesh, India", 694),
+            *resultRow(2, 2, "Vijay Nagar", "Vijay Nagar Square, Indore, Madhya Pradesh, India", 878))
+        repeat(4) { assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices)) }
+        val decision = flow.inspect(choices) as RapidoPreview.Decision.ManualSelection
+        assertTrue(decision.ambiguous)
+    }
+
+    @Test fun `result without an Indore address is never tapped`() {
+        val flow = RapidoPreview(RapidoIntent("Vijay Nagar", RapidoIntent.Vehicle.AUTO))
+        flow.advanced(RapidoPreview.Stage.RESULTS)
+        val choices = screen(resultField("Vijay Nagar"),
+            *resultRow(1, 2, "Vijay Nagar", "Indore Road, Ujjain, Madhya Pradesh, India", 694),
+            *resultRow(2, 2, "Vijay Nagar Police Station", "Indore, Madhya Pradesh, India", 878))
+        repeat(4) { assertEquals(RapidoPreview.Decision.Wait, flow.inspect(choices)) }
+        assertTrue(flow.inspect(choices) is RapidoPreview.Decision.ManualSelection)
     }
 
     @Test fun `waits for Rapido placeholder row before selecting first result`() {
@@ -188,14 +253,20 @@ class RapidoPreviewTest {
         val loading = screen(field,
             ScreenElement(1, "", "Item 1 of 7", "View", rect(0, 694, 1080, 878), false, false),
             ScreenElement(2, "", "Item 2 of 7", "View", rect(0, 881, 1080, 1065), false, false),
-            ScreenElement(3, "", "Vijay Nagar", "TextView", rect(120, 916, 312, 973), false, false))
+            ScreenElement(3, "", "Vijay Nagar", "TextView", rect(120, 916, 400, 973), false, false),
+            ScreenElement(7, "", "Indore, Madhya Pradesh, India", "TextView",
+                rect(120, 983, 720, 1030), false, false))
         assertEquals(RapidoPreview.Decision.Wait, flow.inspect(loading))
         val loaded = screen(field,
             ScreenElement(1, "", "Item 1 of 6", "View", rect(0, 694, 1080, 878), false, false),
-            ScreenElement(2, "", "Vijay Nagar", "TextView", rect(120, 729, 312, 786), false, false),
+            ScreenElement(2, "", "Vijay Nagar", "TextView", rect(120, 729, 420, 786), false, false),
+            ScreenElement(6, "", "Indore, Madhya Pradesh, India", "TextView",
+                rect(120, 796, 720, 843), false, false),
             ScreenElement(3, "", "Item 2 of 6", "View", rect(0, 881, 1080, 1065), false, false),
             ScreenElement(4, "", "Vijay Nagar, Scheme No 54", "TextView",
-                rect(120, 916, 540, 973), false, false))
+                rect(120, 916, 540, 973), false, false),
+            ScreenElement(5, "", "Indore, Madhya Pradesh, India", "TextView",
+                rect(120, 983, 720, 1030), false, false))
         assertEquals(RapidoPreview.Decision.Wait, flow.inspect(loaded))
         val tap = flow.inspect(loaded) as RapidoPreview.Decision.Tap
         assertEquals("Vijay Nagar", tap.label)
@@ -219,7 +290,9 @@ class RapidoPreviewTest {
         val resultScreen = screen(
             pickup.copy(text = "Pickup Location is Palasia. Double tap to change"),
             ScreenElement(2, "", "Item 1 of 5", "View", rect(0, 694, 1080, 878), false, false),
-            ScreenElement(3, "", "Palasia", "TextView", rect(186, 729, 346, 786), false, false))
+            ScreenElement(3, "", "Palasia", "TextView", rect(186, 729, 346, 786), false, false),
+            ScreenElement(8, "", "Indore, Madhya Pradesh, India", "TextView",
+                rect(186, 796, 720, 843), false, false))
         assertEquals(RapidoPreview.Decision.Wait, flow.inspect(resultScreen))
         val result = flow.inspect(resultScreen)
         assertTrue(result is RapidoPreview.Decision.Tap)
@@ -243,6 +316,20 @@ class RapidoPreviewTest {
 
     private fun screen(vararg elements: ScreenElement, pkg: String = RapidoPreview.RAPIDO_PACKAGE) =
         ScreenSnapshot(pkg, true, elements.toList())
+
+    private fun resultField(place: String) = ScreenElement(0, "drop_text",
+        "Drop Location is $place. Double tap to change", "View",
+        rect(178, 429, 1000, 521), false, false)
+
+    private fun resultRow(number: Int, total: Int, title: String, address: String,
+        top: Int): Array<ScreenElement> = arrayOf(
+        ScreenElement(number * 3, "", "Item $number of $total", "View",
+            rect(0, top, 1080, top + 184), false, false),
+        ScreenElement(number * 3 + 1, "", title, "TextView",
+            rect(174, top + 35, 800, top + 92), false, false),
+        ScreenElement(number * 3 + 2, "", address, "TextView",
+            rect(174, top + 102, 950, top + 149), false, false),
+    )
 
     private fun fareScreen(
         selected: RapidoIntent.Vehicle = RapidoIntent.Vehicle.BIKE,

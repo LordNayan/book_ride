@@ -34,19 +34,19 @@ class ScreenReaderService : AccessibilityService() {
     private var lastEventUptime: Long = 0L
     @Volatile private var rapidoTyping = false
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val closeRapidoIme = Runnable {
-        if (rapidoTyping || SessionController.instance?.managesRapidoKeyboard() != true) return@Runnable
-        if (imeTopPx() == 0) return@Runnable
-        val rapidoVisible = try {
-            windows.any { it.root?.packageName?.toString() == "com.rapido.passenger" }
-        } catch (_: Exception) { false }
-        if (rapidoVisible) performGlobalAction(GLOBAL_ACTION_BACK)
-    }
+    private var keyboardSuppressedByUs = false
 
-    /** Leave the search list visible without dismissing the keyboard during Paste. */
-    fun dismissRapidoKeyboard() {
-        mainHandler.removeCallbacks(closeRapidoIme)
-        mainHandler.postDelayed(closeRapidoIme, 150L)
+    /** Suppress the IME without sending Back, which can exit Rapido's search screen. */
+    fun setRapidoKeyboardSuppressed(suppress: Boolean) {
+        mainHandler.post {
+            if (suppress && !keyboardSuppressedByUs) {
+                keyboardSuppressedByUs =
+                    softKeyboardController.setShowMode(SHOW_MODE_HIDDEN)
+            } else if (!suppress && keyboardSuppressedByUs) {
+                softKeyboardController.setShowMode(SHOW_MODE_AUTO)
+                keyboardSuppressedByUs = false
+            }
+        }
     }
 
     override fun onServiceConnected() {
@@ -71,7 +71,6 @@ class ScreenReaderService : AccessibilityService() {
                 lastEventUptime = SystemClock.uptimeMillis()
                 SessionController.instance?.onWindowStateChanged()
                 OverlayService.onSystemWindowsChanged()
-                dismissRapidoKeyboard()
             }
 
             // The keyboard opening or closing arrives here, not as an inset on
@@ -79,7 +78,6 @@ class ScreenReaderService : AccessibilityService() {
             // out of the IME's way.
             AccessibilityEvent.TYPE_WINDOWS_CHANGED -> {
                 OverlayService.onSystemWindowsChanged()
-                dismissRapidoKeyboard()
             }
 
             // The user physically tapped something. That — not a timer, and not
@@ -110,11 +108,13 @@ class ScreenReaderService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        if (keyboardSuppressedByUs) softKeyboardController.setShowMode(SHOW_MODE_AUTO)
         super.onDestroy()
         if (instance === this) instance = null
     }
 
     override fun onUnbind(intent: android.content.Intent?): Boolean {
+        if (keyboardSuppressedByUs) softKeyboardController.setShowMode(SHOW_MODE_AUTO)
         if (instance === this) instance = null
         return super.onUnbind(intent)
     }
@@ -373,6 +373,9 @@ class ScreenReaderService : AccessibilityService() {
             visit(root)
             if (matches.size != 1) return false
             val target = matches.single()
+            if (fieldId == "pickup_text" &&
+                target.contentDescription?.toString()?.startsWith("Pickup Location is ") == true &&
+                !clearRapidoPickup(bounds)) return false
             if (!target.isEditable) return pasteRapidoLocation(bounds, value, fieldId)
             val args = android.os.Bundle().apply {
                 putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
@@ -380,8 +383,47 @@ class ScreenReaderService : AccessibilityService() {
             return target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
         } finally {
             rapidoTyping = false
-            dismissRapidoKeyboard()
         }
+    }
+
+    /** Rapido pre-fills pickup with the current address; its trailing clear icon has no accessibility node. */
+    private fun clearRapidoPickup(bounds: Rect): Boolean {
+        if (bounds.width() < 160 || bounds.height() < 50) return false
+        val clearBounds = Rect(bounds.right - 55, bounds.top + 10, bounds.right - 1, bounds.bottom - 10)
+        if (!bounds.contains(clearBounds)) return false
+        val root = resolveRoot() ?: return false
+        if (root.packageName?.toString() != "com.rapido.passenger") return false
+        var pickupScreen = false
+        val pickupFields = ArrayList<AccessibilityNodeInfo>()
+        fun visit(node: AccessibilityNodeInfo?) {
+            if (node == null) return
+            if (node.contentDescription?.toString() == "PICKUP location Select on map") pickupScreen = true
+            if (node.viewIdResourceName?.substringAfterLast('/') == "pickup_text") pickupFields.add(node)
+            for (i in 0 until node.childCount) visit(node.getChild(i))
+        }
+        visit(root)
+        val field = pickupFields.singleOrNull() ?: return false
+        val currentBounds = Rect().also { field.getBoundsInScreen(it) }
+        if (!pickupScreen || currentBounds != bounds ||
+            field.contentDescription?.toString()?.startsWith("Pickup Location is ") != true) return false
+        if (!rapidoGesture(clearBounds, 90L)) return false
+        repeat(10) {
+            val current = resolveRoot()
+            if (current?.packageName?.toString() != "com.rapido.passenger") return false
+            val descriptions = ArrayList<String>()
+            fun collect(node: AccessibilityNodeInfo?) {
+                if (node == null) return
+                if (node.viewIdResourceName?.substringAfterLast('/') == "pickup_text") {
+                    val b = Rect().also { node.getBoundsInScreen(it) }
+                    if (b == bounds) descriptions.add(node.contentDescription?.toString().orEmpty())
+                }
+                for (i in 0 until node.childCount) collect(node.getChild(i))
+            }
+            collect(current)
+            if (descriptions.singleOrNull()?.startsWith("Enter Pickup location Input Field.") == true) return true
+            Thread.sleep(100)
+        }
+        return false
     }
 
     private fun pasteRapidoLocation(bounds: Rect, value: String, fieldId: String): Boolean {

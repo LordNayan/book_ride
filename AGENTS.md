@@ -26,4 +26,6 @@ phone. See `docs/UPSTREAM_README.md` for the original ScreenSaathi project.
 - `ScreenReaderService.tapRapidoLabel` must reject booking and payment labels.
 - Only `bookRapidoRide` may tap Book, after an explicit spoken vehicle choice
   and rechecking the selected vehicle, exact Book control and unchanged fare.
-- Do not add paid calls or cloud speech to the active mic path.
+- Keep STT and TTS on-device. The user explicitly authorized an optional paid
+  OpenAI call for place spelling; send only extracted place text, and preserve
+  the offline fallback when no key is configured or the call fails.

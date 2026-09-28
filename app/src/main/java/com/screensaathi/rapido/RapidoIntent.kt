@@ -65,7 +65,7 @@ data class RapidoIntent(
             val request = spoken.trim().replace(Regex("\\s+"), " ")
             if (request.isEmpty()) return null
             val lower = request.lowercase()
-            val rideWords = Regex("rapido|रैपिडो|जाना|जानी|चलना|चाहिए|chahiye|jana|ride|auto|bike|cab")
+            val rideWords = Regex("rapido|रैपिडो|जाना|जानी|जना|चलना|चाहिए|chahiye|jana|ride|auto|bike|cab")
             if (!rideWords.containsMatchIn(lower) && request.split(' ').size > 3) return null
 
             val vehicle = when {

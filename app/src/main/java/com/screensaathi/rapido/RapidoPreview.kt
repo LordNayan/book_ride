@@ -22,6 +22,7 @@ class RapidoPreview(val request: RapidoIntent) {
     private var manualNext: Stage? = null
     private var resultSignature: String? = null
     private var stableResultReads = 0
+    private var homeReadsAfterTap = 0
 
     sealed class Decision {
         data object Wait : Decision()
@@ -30,7 +31,7 @@ class RapidoPreview(val request: RapidoIntent) {
         data class Type(val bounds: Rect, val value: String, val next: Stage,
             val fieldId: String = "drop_text") : Decision()
         data class Preview(val message: String) : Decision()
-        data class ManualSelection(val next: Stage) : Decision()
+        data class ManualSelection(val next: Stage, val ambiguous: Boolean = false) : Decision()
         data class Book(val vehicle: RapidoIntent.Vehicle, val actualLabel: String, val fare: String,
             val bounds: Rect) : Decision()
     }
@@ -47,15 +48,16 @@ class RapidoPreview(val request: RapidoIntent) {
     }
 
     fun manualSelectionOnTimeout(): Decision.ManualSelection? = when (stage) {
+        Stage.PICKUP -> Decision.ManualSelection(Stage.PICKUP)
         Stage.RESULTS, Stage.VEHICLE -> Decision.ManualSelection(Stage.VEHICLE)
         Stage.PICKUP_RESULTS, Stage.BOOKING_FOR -> Decision.ManualSelection(Stage.BOOKING_FOR)
         else -> null
     }
 
     fun awaitManualSelection(next: Stage) {
-        require(stage == Stage.RESULTS || stage == Stage.PICKUP_RESULTS ||
+        require(stage == Stage.PICKUP || stage == Stage.RESULTS || stage == Stage.PICKUP_RESULTS ||
             stage == Stage.VEHICLE || stage == Stage.BOOKING_FOR)
-        require(next == Stage.VEHICLE || next == Stage.BOOKING_FOR)
+        require(next == Stage.PICKUP || next == Stage.VEHICLE || next == Stage.BOOKING_FOR)
         manualNext = next
         stage = Stage.MANUAL_RESULT
     }
@@ -110,7 +112,20 @@ class RapidoPreview(val request: RapidoIntent) {
     }
 
     private fun inspectPickup(screen: ScreenSnapshot): Decision {
-        if (screen.elements.none { it.text == "Pickup and Drop Screen" }) return Decision.Wait
+        if (screen.elements.none { it.text == "Pickup and Drop Screen" }) {
+            // A completed accessibility gesture does not prove Rapido navigated.
+            // Re-tapping Home can close the newly opening pickup/drop screen.
+            // Ask for one manual tap if Home is still visible after settling.
+            if (screen.elements.none { it.matchesAny("Where do you want to go?",
+                    "Where to?", "Where to") }) {
+                homeReadsAfterTap = 0
+                return Decision.Wait
+            }
+            if (++homeReadsAfterTap < 10) return Decision.Wait
+            homeReadsAfterTap = 0
+            return Decision.ManualSelection(Stage.PICKUP)
+        }
+        homeReadsAfterTap = 0
         val pickup = screen.elements.filter { it.resourceId == "pickup_text" }
         if (pickup.size != 1) return Decision.Stop("Cannot identify pickup field")
         val field = pickup.single()
@@ -198,13 +213,9 @@ class RapidoPreview(val request: RapidoIntent) {
             return inspectExactLocationResult(screen, "drop_text", "Drop Location is ",
                 request.destination, Stage.VEHICLE)
         }
-        val results = screen.elements.filter { e ->
-            !e.editable && e.text.isNotBlank() &&
-                normalize(e.text).startsWith("$wanted,")
-        }.distinctBy { normalize(it.text) }
-        if (results.size > 1) return unmatchedResult(Stage.VEHICLE)
-        val result = results.singleOrNull() ?: return Decision.Wait
-        return Decision.Tap(result.text, result.bounds, Stage.VEHICLE)
+        // A title alone cannot establish which city Rapido will select.
+        return if (screen.elements.any { it.text.matches(RESULT_ROW_LABEL) })
+            unmatchedResult(Stage.VEHICLE) else Decision.Wait
     }
 
     private fun inspectExactLocationResult(screen: ScreenSnapshot, fieldId: String,
@@ -213,32 +224,50 @@ class RapidoPreview(val request: RapidoIntent) {
             it.resourceId == fieldId && normalize(it.text).startsWith(normalize(prefix + place))
         }
         if (!queryShown) return Decision.Wait
-        val rows = screen.elements.filter { it.text.matches(Regex("Item \\d+ of \\d+")) }
+        val rows = screen.elements.filter { it.text.matches(RESULT_ROW_LABEL) }
             .sortedBy { it.text.substringAfter("Item ").substringBefore(" of").toIntOrNull() ?: Int.MAX_VALUE }
         val wanted = normalize(place)
-        val titledRows = rows.map { row -> row to screen.elements.filter {
-                it.className == "TextView" && containsCenter(row.bounds, it.bounds)
-            }.minByOrNull { it.bounds.top } }
-        val ranked = titledRows.mapNotNull { (row, title) ->
-            if (title == null) return@mapNotNull null
+        val candidates = rows.map { row ->
+            val lines = screen.elements.filter {
+                it.className == "TextView" && it.text.isNotBlank() &&
+                    containsCenter(row.bounds, it.bounds)
+            }.sortedWith(compareBy<ScreenElement> { it.bounds.top }.thenBy { it.bounds.left })
+            val title = lines.firstOrNull()
+            val address = title?.let { heading -> lines.firstOrNull {
+                it.bounds.top >= heading.bounds.bottom &&
+                    it.bounds.left >= heading.bounds.left - 60
+            } }
+            Triple(row, title, address)
+        }
+        val ranked = candidates.mapNotNull { (row, title, address) ->
+            if (title == null || address == null || !INDORE_ADDRESS.containsMatchIn(address.text)) {
+                return@mapNotNull null
+            }
             val actual = normalize(title.text)
             val score = when {
                 actual == wanted -> 3
-                actual.startsWith("$wanted ") -> 2
-                actual.contains(" $wanted ") -> 1
+                actual.startsWith("$wanted,") -> 2
+                actual.startsWith("$wanted ") -> 1
                 else -> 0
             }
-            if (score < 2) null else Triple(row, title, score)
+            if (score < 2) null else LocationResult(row, title, address, score)
         }
-        val best = ranked.maxOfOrNull { it.third } ?: return if (rows.isEmpty() ||
-            titledRows.firstOrNull()?.second == null) Decision.Wait else unmatchedResult(next)
-        val chosen = ranked.first { it.third == best }
+        val best = ranked.maxOfOrNull { it.score } ?: return if (rows.isEmpty())
+            Decision.Wait else unmatchedResult(next)
+        val equallyRanked = ranked.filter { it.score == best }
+        // If two places have the same title but different addresses, the
+        // spoken query gives us no basis for choosing between them.
+        if (equallyRanked.map { normalize(it.address.text) }.distinct().size > 1) {
+            return unmatchedResult(next, ambiguous = true)
+        }
+        val chosen = equallyRanked.first()
         // Rapido briefly inserts unnamed placeholder rows while its search
         // results load. A match below one can shift upward before a gesture
         // arrives, causing the tap to hit a different row.
-        val chosenIndex = rows.indexOf(chosen.first)
-        if (titledRows.take(chosenIndex).any { it.second == null }) return Decision.Wait
-        val signature = "${rows.size}:${chosenIndex}:${chosen.second.text}:${chosen.second.bounds.toShortString()}"
+        val chosenIndex = rows.indexOf(chosen.row)
+        if (candidates.take(chosenIndex).any { it.second == null || it.third == null }) return Decision.Wait
+        val signature = "${rows.size}:${chosenIndex}:${chosen.title.text}:${chosen.address.text}:" +
+            chosen.title.bounds.toShortString()
         if (resultSignature != signature) {
             resultSignature = signature
             stableResultReads = 1
@@ -250,17 +279,30 @@ class RapidoPreview(val request: RapidoIntent) {
         // use the first visible row, as requested by the user.
         // Tap the title itself: a row-centre gesture can land in blank space
         // on Rapido's search-result card without opening that location.
-        val title = chosen.second
-        return Decision.Tap(title.text, title.bounds, next)
+        return Decision.Tap(chosen.title.text, chosen.title.bounds, next)
     }
 
-    private fun unmatchedResult(next: Stage): Decision {
+    private data class LocationResult(
+        val row: ScreenElement,
+        val title: ScreenElement,
+        val address: ScreenElement,
+        val score: Int,
+    )
+
+    private fun unmatchedResult(next: Stage, ambiguous: Boolean = false): Decision {
         unmatchedResultReads++
         val limit = if (stage == Stage.VEHICLE || stage == Stage.BOOKING_FOR) 12 else 5
-        return if (unmatchedResultReads >= limit) Decision.ManualSelection(next) else Decision.Wait
+        return if (unmatchedResultReads >= limit) Decision.ManualSelection(next, ambiguous) else Decision.Wait
     }
 
     private fun inspectManualResult(screen: ScreenSnapshot): Decision = when (manualNext) {
+        Stage.PICKUP -> {
+            if (screen.elements.none { it.text == "Pickup and Drop Screen" }) Decision.Wait
+            else {
+                stage = Stage.PICKUP
+                inspectPickup(screen)
+            }
+        }
         Stage.BOOKING_FOR -> {
             if (screen.elements.none { it.resourceId == "bfse_title" && it.text == "Booking for someone else?" }) {
                 Decision.Wait
@@ -380,5 +422,8 @@ class RapidoPreview(val request: RapidoIntent) {
     companion object {
         const val RAPIDO_PACKAGE = "com.rapido.passenger"
         private val FARE = Regex("₹\\s*[0-9][0-9,]*(?:\\.[0-9]{1,2})?")
+        private val RESULT_ROW_LABEL = Regex("Item \\d+ of \\d+")
+        private val INDORE_ADDRESS = Regex("(?:^|,\\s*)Indore\\s*,\\s*(?:Madhya Pradesh|MP)(?:\\b|$)",
+            RegexOption.IGNORE_CASE)
     }
 }

@@ -1,4 +1,7 @@
 # Copy this file to local.properties and set the path to your Android SDK.
 sdk.dir=C\:/path/to/Android/Sdk
 
-# The Rapido preview uses Android on-device speech. No API key is needed.
+# Optional Indore place spelling correction. Put your OpenAI API key in the
+# gitignored local.properties file, not in this example or a tracked source file.
+# The key is embedded in your personal APK and can be extracted from it.
+# ride.openai.apiKey=YOUR_KEY

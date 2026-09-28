@@ -35,4 +35,6 @@ data class OverlayCommand(
      * entry and reports back the index that was tapped.
      */
     val choices: List<String> = emptyList(),
+    /** Clickable evidence for a web-corrected place, when one was used. */
+    val sourceUrl: String? = null,
 )

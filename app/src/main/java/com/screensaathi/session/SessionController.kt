@@ -26,6 +26,7 @@ import com.screensaathi.overlay.PillState
 import com.screensaathi.rapido.RapidoIntent
 import com.screensaathi.rapido.RapidoPreview
 import com.screensaathi.rapido.OnDeviceHindiSpeech
+import com.screensaathi.rapido.OpenAiPlaceCorrector
 import com.screensaathi.sarvam.AudioPlayer
 import com.screensaathi.sarvam.DeviceTts
 import com.screensaathi.sarvam.Language
@@ -118,6 +119,7 @@ class SessionController(
 
     private val recorder = WavRecorder()
     private val localSpeech = OnDeviceHindiSpeech(context)
+    private val placeCorrector = OpenAiPlaceCorrector()
     private val main = Handler(Looper.getMainLooper())
     @Volatile private var localBusy = false
     @Volatile private var localListening = false
@@ -160,8 +162,11 @@ class SessionController(
 
     /** Render only if [turn] is still the live one. */
     private fun renderIfCurrent(turn: Int, cmd: OverlayCommand) {
-        if (isCurrent(turn)) render(cmd)
+        if (isCurrent(turn)) render(cmd.copy(sourceUrl = ridePlaceSourceUrl))
     }
+
+    /** Shown alongside web-corrected place names for the active ride. */
+    @Volatile private var ridePlaceSourceUrl: String? = null
 
     /**
      * The highlight currently on screen. Every subsequent render must carry it
@@ -199,8 +204,6 @@ class SessionController(
      */
     fun micLevel(): Float = if (isRecording) recorder.level else 0f
 
-    fun managesRapidoKeyboard(): Boolean = rapidoManaged && !stopped
-
     fun onMicTapped() {
         if (localBusy) {
             if (localListening) {
@@ -218,6 +221,8 @@ class SessionController(
     /** Begin a voice-first ride request when the user opens the assistant. */
     fun promptForDestination() {
         val turn = newTurn()
+        ridePlaceSourceUrl = null
+        ScreenReaderService.instance?.setRapidoKeyboardSuppressed(false)
         localSpeech.cancel()
         localBusy = false
         localListening = false
@@ -246,6 +251,7 @@ class SessionController(
     fun previewSpokenDestinationForDebug(text: String, pickup: String? = null) {
         if (!com.screensaathi.BuildConfig.DEBUG) return
         val turn = newTurn()
+        ridePlaceSourceUrl = null
         promptRetries = 0
         val request = RapidoIntent.parse(text)
         if (request == null) {
@@ -253,14 +259,23 @@ class SessionController(
         } else {
             bg.post {
                 if (!isCurrent(turn)) return@post
-                if (pickup == null) askRidePickup(request, turn)
-                else startRidePreview(request.copy(pickupLocation = pickup.takeUnless { it == "current" }), turn)
+                val corrected = correctRidePlace(request.destination, turn)
+                if (!isCurrent(turn) || stopped) return@post
+                val checkedRequest = request.copy(destination = corrected)
+                if (pickup == null) askRidePickup(checkedRequest, turn)
+                else startRidePreview(checkedRequest.copy(
+                    pickupLocation = pickup.takeUnless { it == "current" }), turn)
             }
         }
     }
 
     private fun startLocalListening() {
         val turn = newTurn()
+        if (pendingBookConfirm == null && pendingFareFlow == null &&
+            pendingPickupRequest == null) {
+            ridePlaceSourceUrl = null
+            ScreenReaderService.instance?.setRapidoKeyboardSuppressed(false)
+        }
         deviceTts.stop()
         lastLanguage = "hi-IN"
         ridePreview = null
@@ -334,10 +349,12 @@ class SessionController(
                             if (place == null) {
                                 if (!retryOrGiveUp(turn)) askPickupPlace(request, turn)
                             } else {
+                                val corrected = correctRidePlace(place, turn)
+                                if (!isCurrent(turn) || stopped) return@post
                                 promptRetries = 0
                                 pendingPickupRequest = null
                                 awaitingPickupPlace = false
-                                startRidePreview(request.copy(pickupLocation = place), turn)
+                                startRidePreview(request.copy(pickupLocation = corrected), turn)
                             }
                         } else {
                             when (RapidoIntent.pickupChoice(text)) {
@@ -367,8 +384,10 @@ class SessionController(
                             speakThenListen(retry, turn)
                         }
                     } else {
+                        val corrected = correctRidePlace(request.destination, turn)
+                        if (!isCurrent(turn) || stopped) return@post
                         promptRetries = 0
-                        askRidePickup(request, turn)
+                        askRidePickup(request.copy(destination = corrected), turn)
                     }
                 }
             },
@@ -434,6 +453,7 @@ class SessionController(
      */
     fun onStopTapped() {
         val turn = newTurn()
+        ScreenReaderService.instance?.setRapidoKeyboardSuppressed(false)
         main.post { localSpeech.cancel() }
         localBusy = false
         localListening = false
@@ -1577,6 +1597,16 @@ class SessionController(
 
     @Volatile private var lastUserClickAt: Long = 0L
 
+    private fun correctRidePlace(localPlace: String, turn: Int): String {
+        if (!placeCorrector.shouldCheck(localPlace)) return localPlace
+        renderIfCurrent(turn, OverlayCommand(PillState.THINKING, expanded = true,
+            instruction = "जगह का नाम जाँच रही हूँ।", language = "hi-IN"))
+        val correction = placeCorrector.correct(localPlace) ?: return localPlace
+        if (!isCurrent(turn) || stopped) return localPlace
+        ridePlaceSourceUrl = correction.sourceUrl
+        return correction.place
+    }
+
     private fun askRidePickup(request: RapidoIntent, turn: Int) {
         if (!isCurrent(turn) || stopped) return
         pendingPickupRequest = request
@@ -1614,6 +1644,7 @@ class SessionController(
         val flow = RapidoPreview(request)
         ridePreview = flow
         rapidoManaged = true
+        ScreenReaderService.instance?.setRapidoKeyboardSuppressed(true)
         val pickupPhrase = request.pickupLocation?.let { "$it से" } ?: "आपकी अभी की जगह से"
         val intro = Spoken("$pickupPhrase ${request.destination} तक रैपिडो में ${request.vehicle.label} का किराया देख रही हूँ।", "hi-IN")
         renderIfCurrent(turn, OverlayCommand(PillState.THINKING, expanded = true,
@@ -1631,7 +1662,6 @@ class SessionController(
 
     private fun pollRidePreview(flow: RapidoPreview, turn: Int, startedAt: Long) {
         if (!isCurrent(turn) || stopped || ridePreview !== flow) return
-        ScreenReaderService.instance?.dismissRapidoKeyboard()
         if (SystemClock.uptimeMillis() - startedAt > RIDE_PREVIEW_TIMEOUT_MS) {
             flow.manualSelectionOnTimeout()?.let {
                 promptManualSelection(flow, it, turn)
@@ -1642,11 +1672,6 @@ class SessionController(
             return
         }
         val reader = ScreenReaderService.instance
-        if (reader?.imeTopPx() != 0 && (flow.stage == RapidoPreview.Stage.RESULTS ||
-                flow.stage == RapidoPreview.Stage.PICKUP_RESULTS)) {
-            bg.postDelayed({ pollRidePreview(flow, turn, startedAt) }, RIDE_PREVIEW_POLL_MS)
-            return
-        }
         val rapidoScreen = reader?.snapshot() ?: ScreenSnapshot.EMPTY
         val decision = flow.inspect(rapidoScreen)
         if (com.screensaathi.BuildConfig.DEBUG && decision !is RapidoPreview.Decision.Wait) {
@@ -1721,10 +1746,17 @@ class SessionController(
         decision: RapidoPreview.Decision.ManualSelection, turn: Int) {
         if (!isCurrent(turn) || stopped || ridePreview !== flow) return
         flow.awaitManualSelection(decision.next)
-        val message = if (decision.next == RapidoPreview.Stage.BOOKING_FOR) {
-            "पिकअप की सही जगह अपने आप नहीं चुन सकी। रैपिडो की सूची में सही जगह पर टैप करें।"
-        } else {
-            "जाने की सही जगह अपने आप नहीं चुन सकी। रैपिडो की सूची में सही जगह पर टैप करें।"
+        val message = when (decision.next) {
+            RapidoPreview.Stage.PICKUP ->
+                "रैपिडो में जाने की जगह वाला बॉक्स खोलें। फिर मैं जगह का नाम लिख दूँगी।"
+            RapidoPreview.Stage.BOOKING_FOR -> if (decision.ambiguous)
+                "पिकअप के लिए एक नाम की कई जगहें दिख रही हैं। पूरा पता देखकर सही जगह पर टैप करें।"
+            else
+                "इंदौर में पिकअप की सही जगह पक्की नहीं हुई। पूरा पता देखकर इंदौर की सही जगह पर टैप करें।"
+            else -> if (decision.ambiguous)
+                "जाने के लिए एक नाम की कई जगहें दिख रही हैं। पूरा पता देखकर सही जगह पर टैप करें।"
+            else
+                "इंदौर में जाने की सही जगह पक्की नहीं हुई। पूरा पता देखकर इंदौर की सही जगह पर टैप करें।"
         }
         renderIfCurrent(turn, OverlayCommand(PillState.GUIDING, expanded = true,
             instruction = message, language = "hi-IN"))
@@ -1734,6 +1766,8 @@ class SessionController(
 
     private fun finishRidePreview(turn: Int, message: String, failed: Boolean) {
         if (!isCurrent(turn) || stopped) return
+        ScreenReaderService.instance?.setRapidoKeyboardSuppressed(false)
+        rapidoManaged = false
         ridePreview = null
         pendingFareFlow = null
         val spoken = Spoken(message, "hi-IN")
@@ -1940,6 +1974,7 @@ class SessionController(
 
     fun dispose() {
         turnId.incrementAndGet() // invalidate anything still in flight
+        ScreenReaderService.instance?.setRapidoKeyboardSuppressed(false)
         rapidoManaged = false
         main.post { localSpeech.cancel() }
         player.stop()

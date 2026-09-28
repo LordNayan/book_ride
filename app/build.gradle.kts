@@ -1,9 +1,19 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
 }
 
+val rideLocalProperties = Properties().apply {
+    val localFile = rootProject.file("local.properties")
+    if (localFile.exists()) localFile.inputStream().use { load(it) }
+}
+val openAiPlaceKey = rideLocalProperties.getProperty("ride.openai.apiKey", "").trim()
+    .replace("\\", "\\\\").replace("\"", "\\\"")
+    .replace("\n", "\\n").replace("\r", "\\r")
+
 // This personal Rapido build uses Android's on-device speech service.
-// The inherited Sarvam classes remain for attribution, but no key is bundled.
+// The inherited Sarvam classes remain for attribution, but no Sarvam key is bundled.
 
 android {
     namespace = "com.screensaathi"
@@ -25,6 +35,9 @@ android {
         versionName = "1.0"
 
         buildConfigField("String", "SARVAM_API_KEY", "\"\"")
+        // local.properties is gitignored. The key is still extractable from
+        // the installed APK, so this is suitable only for the user's private build.
+        buildConfigField("String", "OPENAI_PLACE_API_KEY", "\"$openAiPlaceKey\"")
     }
 
     buildTypes {

@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.graphics.Color
@@ -49,6 +50,7 @@ class OverlayService : Service() {
     private lateinit var cardBody: LinearLayout
     private lateinit var pillLabel: TextView
     private lateinit var instructionText: TextView
+    private lateinit var placeSource: TextView
     private lateinit var stateDot: com.screensaathi.overlay.StateOrbView
     private lateinit var micButton: View
     private lateinit var transportRow: View
@@ -182,6 +184,7 @@ class OverlayService : Service() {
         cardBody = pillRoot.findViewById(R.id.card_body)
         pillLabel = pillRoot.findViewById(R.id.pill_label)
         instructionText = pillRoot.findViewById(R.id.instruction_text)
+        placeSource = pillRoot.findViewById(R.id.place_source)
         stateDot = pillRoot.findViewById(R.id.state_dot)
         micButton = pillRoot.findViewById(R.id.mic_button)
         transportRow = pillRoot.findViewById(R.id.transport_row)
@@ -742,6 +745,13 @@ class OverlayService : Service() {
         languageChip.text = Language.nativeName(cmd.language)
 
         cmd.instruction?.let { instructionText.text = it }
+        placeSource.visibility = if (cmd.sourceUrl == null) View.GONE else View.VISIBLE
+        placeSource.setOnClickListener(if (cmd.sourceUrl == null) null else View.OnClickListener {
+            runCatching {
+                startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(cmd.sourceUrl))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+            }
+        })
         renderChoices(cmd.choices)
 
         if (!panelClosing && uiState != AssistantUiState.MINIMIZED && cmd.expanded != expanded) {
